@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+.env
+
+# Streamlit
+.streamlit/secrets.toml
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Logs and outputs
+outputs/
+*.log
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Large model files
+models/
+*.gguf
+*.bin
+*.safetensors
