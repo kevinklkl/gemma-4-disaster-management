@@ -7,19 +7,19 @@ __pycache__/
 # Streamlit
 .streamlit/secrets.toml
 
-# Jupyter
-.ipynb_checkpoints/
-
-# Logs and outputs
+# Data outputs
 outputs/
 *.log
 
-# OS files
+# Jupyter
+.ipynb_checkpoints/
+
+# OS
 .DS_Store
 Thumbs.db
 
 # Large model files
-models/
 *.gguf
 *.bin
 *.safetensors
+models/
