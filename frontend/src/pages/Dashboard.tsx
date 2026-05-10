@@ -25,6 +25,11 @@ type Order = {
   items: Item[];
 };
 
+type ApiLocation =
+  | string
+  | { barangay?: string | null; city?: string | null; province?: string | null }
+  | null;
+
 type ApiMessage = {
   id: string;
   type: string;
@@ -34,7 +39,7 @@ type ApiMessage = {
   status: string;
   packingState: Record<string, number>;
   extractedData: {
-    location: string;
+    location: ApiLocation;
     urgency: string;
     persons: number;
     items: {
@@ -46,6 +51,13 @@ type ApiMessage = {
     }[];
   } | null;
 };
+
+function formatLocation(loc: ApiLocation): string {
+  if (!loc) return "Unknown";
+  if (typeof loc === "string") return loc;
+  const parts = [loc.barangay, loc.city, loc.province].filter(Boolean);
+  return parts.length ? parts.join(", ") : "Unknown";
+}
 
 function formatTime(iso: string): string {
   try {
@@ -59,7 +71,7 @@ function messageToOrder(msg: ApiMessage): Order {
   return {
     id: `ORD-${msg.id}`,
     msgId: msg.id,
-    location: msg.extractedData?.location || "Unknown",
+    location: formatLocation(msg.extractedData?.location ?? null),
     lastUpdated: `Today, ${formatTime(msg.time)}`,
     urgency: msg.extractedData?.urgency || "medium",
     persons: msg.extractedData?.persons || 0,
