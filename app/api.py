@@ -1,3 +1,4 @@
+import asyncio
 import json
 import sqlite3
 from contextlib import contextmanager
@@ -310,7 +311,8 @@ async def websocket_endpoint(websocket: WebSocket):
 @app.post("/api/process_message")
 async def process_message(req: ProcessRequest):
     try:
-        raw = call_ollama(GEMMA_PROMPT_TEMPLATE.format(content=req.content), temperature=0.1)
+        prompt = GEMMA_PROMPT_TEMPLATE.format(content=req.content)
+        raw = await asyncio.to_thread(call_ollama, prompt, 0.1)
         data = _parse_gemma_response(raw)
 
         if req.id is not None:
