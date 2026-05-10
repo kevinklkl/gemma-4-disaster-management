@@ -7,8 +7,9 @@ The prompt is assembled from three pieces:
   3. Few-shot examples that demonstrate Taglish / code-switched input.
 
 Call `build_extraction_prompt(content)` to get the full string to send to
-Ollama. `GEMMA_PROMPT_TEMPLATE` is kept as a legacy export — call sites that
-use `.format(content=...)` continue to work.
+Ollama for single-message extraction. For high-throughput batch extraction
+(seed-inbox sweeps, queued backlog drains) we use the leaner
+`GEMMA_BATCH_PROMPT_TEMPLATE` — fewer tokens per message, simpler schema.
 """
 
 from __future__ import annotations
@@ -113,3 +114,14 @@ def build_extraction_prompt(content: str) -> str:
         f'Message: "{content}"\n'
         f"JSON:"
     )
+
+
+# Lean batch template — used when many messages share one Ollama call.
+# Schema is intentionally simpler than build_extraction_prompt's output:
+# we trade canonical/unit fidelity for throughput, and the API layer
+# treats batch results as best-effort.
+GEMMA_BATCH_PROMPT_TEMPLATE = """Return a JSON array of exactly {n} objects. No markdown. No explanation.
+Extract relief needs from each numbered message. "tawo" means people. If unknown, use null.
+Object schema: {{"location":null,"urgency":"low|medium|high|critical","persons":null,"items":[{{"name":"string","qty":null}}]}}
+{numbered_messages}
+JSON array:""".strip()

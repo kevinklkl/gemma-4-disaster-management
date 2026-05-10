@@ -24,7 +24,7 @@ type Message = {
   source: string;
   time: string;
   content: string;
-  status: "needs_processing" | "processing" | "processed" | "fulfilled";
+  status: "needs_processing" | "processing" | "processed" | "fulfilled" | "failed";
   extractedData: ExtractedData | null;
   processingStartedAt?: string;
   processingDurationMs?: number;
@@ -80,6 +80,12 @@ export function Inbox() {
           ));
           processingRefs.current.delete(msg.msgId);
           setProcessingIds(prev => { const n = new Set(prev); n.delete(msg.msgId); return n; });
+        } else if (msg.type === "processing_failed") {
+          setMessages(prev => prev.map(m =>
+            m.id === msg.msgId ? { ...m, status: "failed" } : m
+          ));
+          processingRefs.current.delete(msg.msgId);
+          setProcessingIds(prev => { const n = new Set(prev); n.delete(msg.msgId); return n; });
         }
       };
 
@@ -132,11 +138,9 @@ export function Inbox() {
       });
   }, []);
 
-  useEffect(() => {
-    messages.forEach(msg => {
-      if (msg.status === "needs_processing") triggerProcess(msg);
-    });
-  }, [messages, triggerProcess]);
+  const handleRetry = (msg: Message) => {
+    setMessages(prev => prev.map(m => m.id === msg.id ? { ...m, status: "needs_processing" } : m));
+  };
 
   const handleUpdateField = (id: string, field: string, value: any) => {
     setMessages(prev => prev.map(m => {
@@ -205,12 +209,43 @@ export function Inbox() {
     }
   };
 
+  const stats = {
+    processed: messages.filter(m => m.status === "processed").length,
+    inQueue: messages.filter(m => m.status === "needs_processing" || m.status === "processing").length,
+    failed: messages.filter(m => m.status === "failed").length,
+  };
+
   return (
     <div className="h-screen bg-surface-container-low font-body text-on-surface flex flex-col overflow-hidden">
       <TopNav />
       <div className="flex flex-1 overflow-hidden">
         <main className="flex-1 overflow-y-auto pb-24 md:pb-8">
           <div className="p-6 max-w-5xl mx-auto space-y-6">
+
+            <div className="grid grid-cols-3 gap-3">
+              <div className="rounded-xl bg-surface-container border border-outline-variant/20 px-4 py-3 flex items-center gap-3">
+                <CheckCircle2 className="w-5 h-5 text-primary shrink-0" />
+                <div>
+                  <p className="text-2xl font-black text-on-surface leading-none">{stats.processed}</p>
+                  <p className="text-[10px] font-bold uppercase tracking-widest text-on-surface-variant mt-0.5">Processed</p>
+                </div>
+              </div>
+              <div className="rounded-xl bg-surface-container border border-outline-variant/20 px-4 py-3 flex items-center gap-3">
+                <Loader2 className={`w-5 h-5 text-secondary shrink-0 ${stats.inQueue > 0 ? "animate-spin" : ""}`} />
+                <div>
+                  <p className="text-2xl font-black text-on-surface leading-none">{stats.inQueue}</p>
+                  <p className="text-[10px] font-bold uppercase tracking-widest text-on-surface-variant mt-0.5">In Queue</p>
+                </div>
+              </div>
+              <div className="rounded-xl bg-surface-container border border-outline-variant/20 px-4 py-3 flex items-center gap-3">
+                <AlertCircle className="w-5 h-5 text-error shrink-0" />
+                <div>
+                  <p className="text-2xl font-black text-on-surface leading-none">{stats.failed}</p>
+                  <p className="text-[10px] font-bold uppercase tracking-widest text-on-surface-variant mt-0.5">Failed</p>
+                </div>
+              </div>
+            </div>
+
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-2">
               <div>
                 <h2 className="text-2xl font-headline font-bold text-on-surface">Recent Messages</h2>
@@ -278,6 +313,21 @@ export function Inbox() {
                             {getElapsedS(message.processingStartedAt)}s
                           </span>
                         </div>
+                      </div>
+                    )}
+
+                    {message.status === "failed" && (
+                      <div className="flex items-center justify-between mt-4 border-t border-outline-variant/10 pt-4">
+                        <div className="flex items-center gap-2 text-error text-sm font-bold">
+                          <AlertCircle className="w-4 h-4" />
+                          Extraction failed
+                        </div>
+                        <button
+                          onClick={() => handleRetry(message)}
+                          className="px-4 py-2 bg-error/10 text-error border border-error/30 rounded-lg text-sm font-bold flex items-center gap-2 hover:bg-error/20 transition-colors"
+                        >
+                          <RefreshCw className="w-4 h-4" /> Retry
+                        </button>
                       </div>
                     )}
 
