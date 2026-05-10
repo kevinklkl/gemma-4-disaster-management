@@ -72,12 +72,27 @@ def init_db():
             ("extracted_data", "TEXT"),
             ("message_type", "TEXT DEFAULT 'sms'"),
             ("packing_state", "TEXT"),
+            ("processing_started_at", "TEXT"),
+            ("processing_duration_ms", "INTEGER"),
         ]:
             if col not in existing:
                 conn.execute(f"ALTER TABLE messages ADD COLUMN {col} {definition}")
 
 
 init_db()
+
+_event_loop = None
+
+
+@app.on_event("startup")
+async def _store_loop():
+    global _event_loop
+    _event_loop = asyncio.get_event_loop()
+
+
+def _broadcast_sync(payload: dict):
+    if _event_loop:
+        asyncio.run_coroutine_threadsafe(manager.broadcast(payload), _event_loop)
 
 
 @contextmanager
@@ -100,6 +115,8 @@ def row_to_message(r: sqlite3.Row) -> dict:
         "status": r["status"] or "needs_processing",
         "extractedData": json.loads(r["extracted_data"]) if r["extracted_data"] else None,
         "packingState": json.loads(r["packing_state"]) if r["packing_state"] else {},
+        "processingStartedAt": r["processing_started_at"],
+        "processingDurationMs": r["processing_duration_ms"],
     }
 
 
@@ -117,17 +134,31 @@ def _parse_gemma_response(text: str) -> dict:
 
 def _run_gemma_bg(msg_id: int, content: str):
     """Background task: run Gemma extraction and persist result to DB."""
+    started_at = datetime.now(timezone.utc)
+    with get_db() as conn:
+        conn.execute(
+            "UPDATE messages SET status = 'processing', processing_started_at = ? WHERE id = ?",
+            (started_at.isoformat(), msg_id)
+        )
+        conn.commit()
+    _broadcast_sync({"type": "processing_started", "msgId": str(msg_id), "startedAt": started_at.isoformat()})
+
     try:
         raw = call_ollama(GEMMA_PROMPT_TEMPLATE.format(content=content), temperature=0.1)
         data = _parse_gemma_response(raw)
+        duration_ms = int((datetime.now(timezone.utc) - started_at).total_seconds() * 1000)
         with get_db() as conn:
             conn.execute(
-                "UPDATE messages SET extracted_data = ?, status = 'processed' WHERE id = ?",
-                (json.dumps(data), msg_id)
+                "UPDATE messages SET extracted_data = ?, status = 'processed', processing_duration_ms = ? WHERE id = ?",
+                (json.dumps(data), duration_ms, msg_id)
             )
             conn.commit()
-        print(f"Gemma processed message {msg_id}: {data}")
+        _broadcast_sync({"type": "processing_done", "msgId": str(msg_id), "durationMs": duration_ms, "extractedData": data})
+        print(f"Gemma processed message {msg_id} in {duration_ms}ms")
     except Exception as e:
+        with get_db() as conn:
+            conn.execute("UPDATE messages SET status = 'needs_processing' WHERE id = ?", (msg_id,))
+            conn.commit()
         print(f"Background Gemma failed for message {msg_id}: {e}")
 
 
@@ -310,20 +341,36 @@ async def websocket_endpoint(websocket: WebSocket):
 
 @app.post("/api/process_message")
 async def process_message(req: ProcessRequest):
+    started_at = datetime.now(timezone.utc)
     try:
+        if req.id is not None:
+            with get_db() as conn:
+                conn.execute(
+                    "UPDATE messages SET status = 'processing', processing_started_at = ? WHERE id = ?",
+                    (started_at.isoformat(), int(req.id))
+                )
+                conn.commit()
+            await manager.broadcast({"type": "processing_started", "msgId": req.id, "startedAt": started_at.isoformat()})
+
         prompt = GEMMA_PROMPT_TEMPLATE.format(content=req.content)
         raw = await asyncio.to_thread(call_ollama, prompt, 0.1)
         data = _parse_gemma_response(raw)
+        duration_ms = int((datetime.now(timezone.utc) - started_at).total_seconds() * 1000)
 
         if req.id is not None:
             with get_db() as conn:
                 conn.execute(
-                    "UPDATE messages SET extracted_data = ?, status = 'processed' WHERE id = ?",
-                    (json.dumps(data), int(req.id))
+                    "UPDATE messages SET extracted_data = ?, status = 'processed', processing_duration_ms = ? WHERE id = ?",
+                    (json.dumps(data), duration_ms, int(req.id))
                 )
                 conn.commit()
+            await manager.broadcast({"type": "processing_done", "msgId": req.id, "durationMs": duration_ms, "extractedData": data})
 
-        return data
+        return {"extractedData": data, "durationMs": duration_ms}
     except Exception as e:
+        if req.id is not None:
+            with get_db() as conn:
+                conn.execute("UPDATE messages SET status = 'needs_processing' WHERE id = ?", (int(req.id),))
+                conn.commit()
         print(f"Error processing message: {e}")
         raise HTTPException(status_code=500, detail="Failed to process message")
