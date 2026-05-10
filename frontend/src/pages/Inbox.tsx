@@ -6,7 +6,7 @@ import { MoreVertical, MessageSquare, Mic, Smartphone, UserCircle, CheckCircle2,
 type ExtractedData = {
   location: string;
   urgency: string;
-  families: number;
+  persons: number;
   items: { name: string; qty: number }[];
 };
 
@@ -312,8 +312,8 @@ export function Inbox() {
                           <div className="relative">
                             <input
                               type="number"
-                              value={message.extractedData.families || 0}
-                              onChange={(e) => handleUpdateField(message.id, "families", Number(e.target.value))}
+                              value={message.extractedData.persons || 0}
+                              onChange={(e) => handleUpdateField(message.id, "persons", Number(e.target.value))}
                               className="w-full bg-surface-container hover:bg-surface-container-high rounded-md pl-2 pr-8 py-1.5 text-sm border-none ring-1 ring-outline-variant/30 focus:ring-primary outline-none text-on-surface font-bold transition-colors"
                             />
                             <span className="absolute right-2 top-1.5 text-xs text-on-surface-variant pointer-events-none">est.</span>

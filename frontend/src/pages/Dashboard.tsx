@@ -18,7 +18,7 @@ type Order = {
   location: string;
   lastUpdated: string;
   urgency: string;
-  families: number;
+  persons: number;
   status: "packing" | "ready";
   items: Item[];
 };
@@ -34,7 +34,7 @@ type ApiMessage = {
   extractedData: {
     location: string;
     urgency: string;
-    families: number;
+    persons: number;
     items: { name: string; qty: number }[];
   } | null;
 };
@@ -54,7 +54,7 @@ function messageToOrder(msg: ApiMessage): Order {
     location: msg.extractedData?.location || "Unknown",
     lastUpdated: `Today, ${formatTime(msg.time)}`,
     urgency: msg.extractedData?.urgency || "medium",
-    families: msg.extractedData?.families || 0,
+    persons: msg.extractedData?.persons || 0,
     status: "packing",
     items: (msg.extractedData?.items || []).map((item, i) => ({
       id: `${msg.id}-${i}`,
@@ -324,7 +324,7 @@ export function Dashboard() {
                     </div>
                     <div className="flex justify-between items-end mt-1">
                       <p className="text-sm font-bold text-on-surface-variant flex items-center gap-1.5 px-3 py-1 bg-surface-container rounded-full">
-                        <Users className="w-4 h-4" /> {order.families} Households
+                        <Users className="w-4 h-4" /> {order.persons} Households
                       </p>
                       <div className={`px-3 py-1 text-xs font-bold uppercase tracking-wider rounded-full shadow-sm ${getUrgencyColor(order.urgency)}`}>
                         {order.urgency} Priority

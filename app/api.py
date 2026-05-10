@@ -144,8 +144,8 @@ def _run_gemma_bg(msg_id: int, content: str):
     _broadcast_sync({"type": "processing_started", "msgId": str(msg_id), "startedAt": started_at.isoformat()})
 
     try:
-        raw = call_ollama(GEMMA_PROMPT_TEMPLATE.format(content=content), temperature=0.1)
-        data = _parse_gemma_response(raw)
+        result = call_ollama(GEMMA_PROMPT_TEMPLATE.format(content=content), temperature=0.1)
+        data = _parse_gemma_response(result.response)
         duration_ms = int((datetime.now(timezone.utc) - started_at).total_seconds() * 1000)
         with get_db() as conn:
             conn.execute(
@@ -154,7 +154,7 @@ def _run_gemma_bg(msg_id: int, content: str):
             )
             conn.commit()
         _broadcast_sync({"type": "processing_done", "msgId": str(msg_id), "durationMs": duration_ms, "extractedData": data})
-        print(f"Gemma processed message {msg_id} in {duration_ms}ms")
+        print(f"Gemma processed message {msg_id} in {duration_ms}ms  [{result.timing_summary()}]")
     except Exception as e:
         with get_db() as conn:
             conn.execute("UPDATE messages SET status = 'needs_processing' WHERE id = ?", (msg_id,))
@@ -353,9 +353,10 @@ async def process_message(req: ProcessRequest):
             await manager.broadcast({"type": "processing_started", "msgId": req.id, "startedAt": started_at.isoformat()})
 
         prompt = GEMMA_PROMPT_TEMPLATE.format(content=req.content)
-        raw = await asyncio.to_thread(call_ollama, prompt, 0.1)
-        data = _parse_gemma_response(raw)
+        result = await asyncio.to_thread(call_ollama, prompt, 0.1)
+        data = _parse_gemma_response(result.response)
         duration_ms = int((datetime.now(timezone.utc) - started_at).total_seconds() * 1000)
+        print(f"Gemma /api/process_message {duration_ms}ms  [{result.timing_summary()}]")
 
         if req.id is not None:
             with get_db() as conn:

@@ -7,4 +7,6 @@ Extract donation inventory as JSON only:
 """
 
 result = call_ollama(prompt)
-print(result)
+print(result.response)
+print()
+print(result.timing_summary())
