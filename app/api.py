@@ -1,6 +1,7 @@
 import asyncio
 import json
 import sqlite3
+import time
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from typing import Any, List, Optional
@@ -144,8 +145,11 @@ def _run_gemma_bg(msg_id: int, content: str):
     _broadcast_sync({"type": "processing_started", "msgId": str(msg_id), "startedAt": started_at.isoformat()})
 
     try:
+        t0 = time.perf_counter()
         result = call_ollama(GEMMA_PROMPT_TEMPLATE.format(content=content), temperature=0.1)
+        t1 = time.perf_counter()
         data = _parse_gemma_response(result.response)
+        t2 = time.perf_counter()
         duration_ms = int((datetime.now(timezone.utc) - started_at).total_seconds() * 1000)
         with get_db() as conn:
             conn.execute(
@@ -153,8 +157,17 @@ def _run_gemma_bg(msg_id: int, content: str):
                 (json.dumps(data), duration_ms, msg_id)
             )
             conn.commit()
+        t3 = time.perf_counter()
         _broadcast_sync({"type": "processing_done", "msgId": str(msg_id), "durationMs": duration_ms, "extractedData": data})
-        print(f"Gemma processed message {msg_id} in {duration_ms}ms  [{result.timing_summary()}]")
+        t4 = time.perf_counter()
+        print(
+            f"[msg {msg_id}] total={duration_ms}ms"
+            f"  ollama={1000*(t1-t0):.0f}ms"
+            f"  parse={1000*(t2-t1):.0f}ms"
+            f"  db={1000*(t3-t2):.0f}ms"
+            f"  broadcast={1000*(t4-t3):.0f}ms"
+            f"  [{result.timing_summary()}]"
+        )
     except Exception as e:
         with get_db() as conn:
             conn.execute("UPDATE messages SET status = 'needs_processing' WHERE id = ?", (msg_id,))
@@ -353,10 +366,12 @@ async def process_message(req: ProcessRequest):
             await manager.broadcast({"type": "processing_started", "msgId": req.id, "startedAt": started_at.isoformat()})
 
         prompt = GEMMA_PROMPT_TEMPLATE.format(content=req.content)
+        t0 = time.perf_counter()
         result = await asyncio.to_thread(call_ollama, prompt, 0.1)
+        t1 = time.perf_counter()
         data = _parse_gemma_response(result.response)
+        t2 = time.perf_counter()
         duration_ms = int((datetime.now(timezone.utc) - started_at).total_seconds() * 1000)
-        print(f"Gemma /api/process_message {duration_ms}ms  [{result.timing_summary()}]")
 
         if req.id is not None:
             with get_db() as conn:
@@ -365,7 +380,24 @@ async def process_message(req: ProcessRequest):
                     (json.dumps(data), duration_ms, int(req.id))
                 )
                 conn.commit()
+            t3 = time.perf_counter()
             await manager.broadcast({"type": "processing_done", "msgId": req.id, "durationMs": duration_ms, "extractedData": data})
+            t4 = time.perf_counter()
+            print(
+                f"[process_message {req.id}] total={duration_ms}ms"
+                f"  ollama={1000*(t1-t0):.0f}ms"
+                f"  parse={1000*(t2-t1):.0f}ms"
+                f"  db={1000*(t3-t2):.0f}ms"
+                f"  broadcast={1000*(t4-t3):.0f}ms"
+                f"  [{result.timing_summary()}]"
+            )
+        else:
+            print(
+                f"[process_message] total={duration_ms}ms"
+                f"  ollama={1000*(t1-t0):.0f}ms"
+                f"  parse={1000*(t2-t1):.0f}ms"
+                f"  [{result.timing_summary()}]"
+            )
 
         return {"extractedData": data, "durationMs": duration_ms}
     except Exception as e:
