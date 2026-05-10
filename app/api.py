@@ -8,6 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from engine.ollama_client import call_ollama
+from prompts.extraction_prompt import GEMMA_PROMPT_TEMPLATE
 
 app = FastAPI()
 
@@ -100,26 +101,6 @@ def row_to_message(r: sqlite3.Row) -> dict:
         "packingState": json.loads(r["packing_state"]) if r["packing_state"] else {},
     }
 
-
-GEMMA_PROMPT_TEMPLATE = """
-    Extract the requested relief goods information from this message.
-    Note that "tawo" means people, divide it by 5 to estimate families if exact families are not given.
-    Message to process: {content}
-
-    Return ONLY a valid JSON object matching this schema:
-    {{
-        "location": "The location, address, or sitio mentioned.",
-        "urgency": "critical, high, medium, or low",
-        "families": <number of families>,
-        "items": [
-            {{
-                "name": "item name",
-                "qty": <number>
-            }}
-        ]
-    }}
-    Do not wrap the JSON in Markdown formatting like ```json ... ```. Just return the raw JSON object.
-    """
 
 
 def _parse_gemma_response(text: str) -> dict:
