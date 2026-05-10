@@ -2,9 +2,6 @@ import { useState, useEffect, useRef } from "react";
 import { TopNav } from "../components/TopNav";
 import { MobileNav } from "../components/MobileNav";
 import { Search, Bell, HelpCircle, Inbox as InboxIcon, MoreVertical, MessageSquare, Mic, Smartphone, UserCircle, CheckCircle2, AlertCircle, Loader2, ArrowRight, X } from "lucide-react";
-import { GoogleGenAI, Type } from "@google/genai";
-
-const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
 const INITIAL_MESSAGES = [
   {
@@ -71,52 +68,19 @@ export function Inbox() {
 
         const processMessage = async () => {
           try {
-            const response = await ai.models.generateContent({
-              model: "gemini-3-flash-preview",
-              contents: `Extract the requested relief goods information from this message. 
-              Note that "tawo" means people, divide it by 5 to estimate families if exact families are not given. 
-              Message to process: ${msg.content}`,
-              config: {
-                responseMimeType: "application/json",
-                responseSchema: {
-                  type: Type.OBJECT,
-                  properties: {
-                    location: {
-                      type: Type.STRING,
-                      description: "The location, address, or sitio mentioned.",
-                    },
-                    urgency: {
-                      type: Type.STRING,
-                      description: "The overall urgency: critical, high, medium, or low.",
-                    },
-                    families: {
-                      type: Type.NUMBER,
-                      description: "Estimated number of families affected.",
-                    },
-                    items: {
-                      type: Type.ARRAY,
-                      description: "List of requested or needed items.",
-                      items: {
-                        type: Type.OBJECT,
-                        properties: {
-                          name: {
-                            type: Type.STRING,
-                            description: "Broad category or name of item (e.g. Drinking Water, Food, Rescue Boat).",
-                          },
-                          qty: {
-                            type: Type.NUMBER,
-                            description: "Estimated quantity needed based on families or people.",
-                          }
-                        }
-                      }
-                    }
-                  }
-                }
-              }
+            const response = await fetch('/api/process_message', {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify({ content: msg.content }),
             });
 
-            const extractedText = response.text.trim();
-            const data = JSON.parse(extractedText);
+            if (!response.ok) {
+              throw new Error(`Error processing message: ${response.statusText}`);
+            }
+
+            const data = await response.json();
             
             setMessages(prev => prev.map(m => 
               m.id === msg.id ? { ...m, status: "processed", extractedData: data } : m
