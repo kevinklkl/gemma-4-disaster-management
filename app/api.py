@@ -1,8 +1,24 @@
+import json
 from datetime import datetime
 from typing import Any
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+
+from engine.ollama_client import call_ollama
 
 app = FastAPI()
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+class ProcessRequest(BaseModel):
+    content: str
 
 INBOX = []
 
@@ -83,3 +99,43 @@ def get_inbox():
     return {
         "messages": INBOX
     }
+
+@app.post("/api/process_message")
+async def process_message(req: ProcessRequest):
+    prompt = f"""
+    Extract the requested relief goods information from this message.
+    Note that "tawo" means people, divide it by 5 to estimate families if exact families are not given.
+    Message to process: {req.content}
+
+    Return ONLY a valid JSON object matching this schema:
+    {{
+        "location": "The location, address, or sitio mentioned.",
+        "urgency": "critical, high, medium, or low",
+        "families": <number of families>,
+        "items": [
+            {{
+                "name": "item name",
+                "qty": <number>
+            }}
+        ]
+    }}
+    Do not wrap the JSON in Markdown formatting like ```json ... ```. Just return the raw JSON object.
+    """
+
+    try:
+        response_text = call_ollama(prompt, temperature=0.1)
+        response_text = response_text.strip()
+
+        # In case the model returns markdown JSON blocks
+        if response_text.startswith("```json"):
+            response_text = response_text[7:]
+        if response_text.startswith("```"):
+            response_text = response_text[3:]
+        if response_text.endswith("```"):
+            response_text = response_text[:-3]
+
+        data = json.loads(response_text)
+        return data
+    except Exception as e:
+        print(f"Error processing message: {e}")
+        raise HTTPException(status_code=500, detail="Failed to process message")
