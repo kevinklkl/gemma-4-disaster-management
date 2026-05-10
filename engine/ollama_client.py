@@ -47,8 +47,10 @@ def call_ollama(prompt: str, temperature: float = 0.1) -> OllamaResult:
                 "keep_alive": "30m",
                 "options": {
                     "temperature": temperature,
-                    "num_ctx": 1024,
-                    "num_predict": 120,
+                    # Prompt is ~1.2-1.5k tokens (catalog + few-shots) plus message.
+                    "num_ctx": 4096,
+                    # Multi-item responses can run long; cap generously.
+                    "num_predict": 512,
                 },
             },
             timeout=90,

@@ -3,11 +3,19 @@ import { TopNav } from "../components/TopNav";
 import { MobileNav } from "../components/MobileNav";
 import { MoreVertical, MessageSquare, Mic, Smartphone, UserCircle, CheckCircle2, AlertCircle, Loader2, ArrowRight, X, RefreshCw, Timer } from "lucide-react";
 
+type ExtractedItem = {
+  name: string;
+  qty: number | null;
+  canonical?: string | null;
+  raw_text?: string | null;
+  unit?: string | null;
+};
+
 type ExtractedData = {
   location: string;
   urgency: string;
   persons: number;
-  items: { name: string; qty: number }[];
+  items: ExtractedItem[];
 };
 
 type Message = {
@@ -333,8 +341,8 @@ export function Inbox() {
                               />
                               <input
                                 type="number"
-                                value={item.qty}
-                                onChange={(e) => handleUpdateItem(message.id, i, "qty", Number(e.target.value))}
+                                value={item.qty ?? ""}
+                                onChange={(e) => handleUpdateItem(message.id, i, "qty", e.target.value === "" ? null : Number(e.target.value))}
                                 className="w-16 bg-surface-container hover:bg-surface-container-high rounded-md px-2 py-1.5 text-xs border-none ring-1 ring-outline-variant/30 focus:ring-primary outline-none text-on-surface font-bold transition-colors text-center"
                               />
                               <button onClick={() => handleRemoveItem(message.id, i)} className="text-on-surface-variant opacity-0 group-hover:opacity-100 hover:text-error hover:bg-error/10 p-1 rounded transition-all">

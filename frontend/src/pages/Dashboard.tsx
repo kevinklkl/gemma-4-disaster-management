@@ -8,8 +8,10 @@ import {
 type Item = {
   id: string;
   name: string;
-  qty: number;
+  qty: number | null;
   packedQty: number;
+  canonical?: string | null;
+  unit?: string | null;
 };
 
 type Order = {
@@ -35,7 +37,13 @@ type ApiMessage = {
     location: string;
     urgency: string;
     persons: number;
-    items: { name: string; qty: number }[];
+    items: {
+      name: string;
+      qty: number | null;
+      canonical?: string | null;
+      raw_text?: string | null;
+      unit?: string | null;
+    }[];
   } | null;
 };
 
@@ -61,6 +69,8 @@ function messageToOrder(msg: ApiMessage): Order {
       name: item.name,
       qty: item.qty,
       packedQty: msg.packingState?.[String(i)] ?? 0,
+      canonical: item.canonical ?? null,
+      unit: item.unit ?? null,
     })),
   };
 }
@@ -243,18 +253,30 @@ export function Dashboard() {
     }
   };
 
+  // Aggregate by canonical key so "tubig" and "water" merge into one row.
+  // Different units stay separate (you can't sum 5kg + 5 sacks). Items with
+  // null qty contribute 0 to the total but still appear so dispatchers can
+  // see that quantity needs to be clarified.
   const aggregatedItems = Object.values(
     orders
       .filter((o) => o.status === "packing")
       .flatMap((o) => o.items)
       .reduce(
         (acc, item) => {
-          const key = item.name.toLowerCase();
-          if (!acc[key]) acc[key] = { name: item.name, remaining: 0 };
-          acc[key].remaining += item.qty - item.packedQty;
+          const groupKey = item.canonical || item.name.toLowerCase();
+          const unit = item.unit || "";
+          const key = `${groupKey}|${unit}`;
+          if (!acc[key]) {
+            acc[key] = { name: item.name, unit, remaining: 0, hasUnknownQty: false };
+          }
+          if (item.qty == null) {
+            acc[key].hasUnknownQty = true;
+          } else {
+            acc[key].remaining += item.qty - item.packedQty;
+          }
           return acc;
         },
-        {} as Record<string, { name: string; remaining: number }>
+        {} as Record<string, { name: string; unit: string; remaining: number; hasUnknownQty: boolean }>
       )
   ).sort((a, b) => b.remaining - a.remaining);
 

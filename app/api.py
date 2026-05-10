@@ -10,7 +10,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from engine.ollama_client import call_ollama
-from prompts.extraction_prompt import GEMMA_PROMPT_TEMPLATE
+from engine.extraction.parser import parse_response
+from engine.extraction.validator import validate_and_canonicalize
+from prompts.extraction_prompt import build_extraction_prompt
 
 app = FastAPI()
 
@@ -122,17 +124,6 @@ def row_to_message(r: sqlite3.Row) -> dict:
 
 
 
-def _parse_gemma_response(text: str) -> dict:
-    text = text.strip()
-    if text.startswith("```json"):
-        text = text[7:]
-    if text.startswith("```"):
-        text = text[3:]
-    if text.endswith("```"):
-        text = text[:-3]
-    return json.loads(text)
-
-
 def _run_gemma_bg(msg_id: int, content: str):
     """Background task: run Gemma extraction and persist result to DB."""
     started_at = datetime.now(timezone.utc)
@@ -146,9 +137,9 @@ def _run_gemma_bg(msg_id: int, content: str):
 
     try:
         t0 = time.perf_counter()
-        result = call_ollama(GEMMA_PROMPT_TEMPLATE.format(content=content), temperature=0.1)
+        result = call_ollama(build_extraction_prompt(content), temperature=0.1)
         t1 = time.perf_counter()
-        data = _parse_gemma_response(result.response)
+        data = validate_and_canonicalize(parse_response(result.response))
         t2 = time.perf_counter()
         duration_ms = int((datetime.now(timezone.utc) - started_at).total_seconds() * 1000)
         with get_db() as conn:
@@ -365,11 +356,11 @@ async def process_message(req: ProcessRequest):
                 conn.commit()
             await manager.broadcast({"type": "processing_started", "msgId": req.id, "startedAt": started_at.isoformat()})
 
-        prompt = GEMMA_PROMPT_TEMPLATE.format(content=req.content)
+        prompt = build_extraction_prompt(req.content)
         t0 = time.perf_counter()
         result = await asyncio.to_thread(call_ollama, prompt, 0.1)
         t1 = time.perf_counter()
-        data = _parse_gemma_response(result.response)
+        data = validate_and_canonicalize(parse_response(result.response))
         t2 = time.perf_counter()
         duration_ms = int((datetime.now(timezone.utc) - started_at).total_seconds() * 1000)
 
