@@ -470,11 +470,17 @@ export function Dashboard() {
               <ul className="space-y-3">
                 {aggregatedItems.map((item) => (
                   <li
-                    key={item.name}
+                    key={`${item.name}-${item.unit}`}
                     className="flex justify-between items-center bg-surface-container-low px-4 py-3 rounded-xl border border-outline-variant/10"
                   >
-                    <div className="font-bold text-on-surface">{item.name}</div>
-                    <div className="text-2xl font-black text-primary">{item.remaining}</div>
+                    <div className="font-bold text-on-surface">
+                      {item.name}
+                      {item.unit && <span className="ml-2 text-xs font-normal text-on-surface-variant">({item.unit})</span>}
+                    </div>
+                    <div className="text-2xl font-black text-primary">
+                      {item.remaining}
+                      {item.hasUnknownQty && <span className="ml-1 text-sm text-on-surface-variant">+?</span>}
+                    </div>
                   </li>
                 ))}
               </ul>
