@@ -1,0 +1,28 @@
+/**
+ * @license
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
+import { Dashboard } from './pages/Dashboard';
+import { Inbox } from './pages/Inbox';
+import { DonorView } from './pages/DonorView';
+import { IntakeChannelSelector } from './pages/IntakeChannelSelector';
+import { MobileIntake } from './pages/MobileIntake';
+import { Coverage } from './pages/Coverage';
+
+export default function App() {
+  return (
+    <Router>
+      <Routes>
+        <Route path="/" element={<Dashboard />} />
+        <Route path="/inbox" element={<Inbox />} />
+        <Route path="/coverage" element={<Coverage />} />
+        <Route path="/donor-view" element={<DonorView />} />
+        <Route path="/intake" element={<IntakeChannelSelector />} />
+        <Route path="/intake/type" element={<MobileIntake />} />
+        <Route path="*" element={<Navigate to="/" replace />} />
+      </Routes>
+    </Router>
+  );
+}
