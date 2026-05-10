@@ -11,6 +11,11 @@ __pycache__/
 outputs/
 *.log
 
+# Database files
+*.db
+*.sqlite
+*.sqlite3
+
 # Jupyter
 .ipynb_checkpoints/
 
