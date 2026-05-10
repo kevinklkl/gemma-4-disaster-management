@@ -1,101 +1,74 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { TopNav } from "../components/TopNav";
 import { MobileNav } from "../components/MobileNav";
-import { Search, Bell, HelpCircle, Inbox as InboxIcon, MoreVertical, MessageSquare, Mic, Smartphone, UserCircle, CheckCircle2, AlertCircle, Loader2, ArrowRight, X } from "lucide-react";
+import { Search, Bell, HelpCircle, Inbox as InboxIcon, MoreVertical, MessageSquare, Mic, Smartphone, UserCircle, CheckCircle2, AlertCircle, Loader2, ArrowRight, X, RefreshCw } from "lucide-react";
 
-const INITIAL_MESSAGES = [
-  {
-    id: "m1",
-    type: "sms",
-    source: "SMS Auto-Intake",
-    time: "Just now",
-    content: '"Tabang diri dapita sa may sapa kay nitaas na ang tubig. Mga 10 ka tawo mi diri, paspas ang baha."',
-    status: "needs_processing",
-    extractedData: null,
-  },
-  {
-    id: "m2",
-    type: "voice",
-    source: "Radio / Voice",
-    time: "6 mins ago",
-    content: '[Transcript]: "12 households roof blew off in Sitio Bukid, no reported casualties but they need shelter ASAP."',
-    status: "processed",
-    extractedData: {
-      location: "Sitio Bukid",
-      urgency: "high",
-      families: 12,
-      items: [{ name: "Shelter / Tarpaulins", qty: 12 }]
-    }
-  },
-  {
-    id: "m3",
-    type: "walkin",
-    source: "Walk-in Log",
-    time: "11 mins ago",
-    content: '"need food packs about 30 family" — reported by kagawad in Purok Mahogany',
-    status: "processed",
-    extractedData: {
-      location: "Purok Mahogany",
-      urgency: "medium",
-      families: 30,
-      items: [{ name: "Food Packs", qty: 30 }]
-    }
-  },
-  {
-    id: "m4",
-    type: "viber",
-    source: "Viber Relay",
-    time: "14 mins ago",
-    content: '"walay tubig 5 ka pamilya, naa baby" — Sitio Riverside',
-    status: "processed",
-    extractedData: {
-      location: "Sitio Riverside",
-      urgency: "high",
-      families: 5,
-      items: [{ name: "Drinking Water", qty: 5 }, { name: "Baby Needs", qty: 1 }]
-    }
-  }
-];
+type ExtractedData = {
+  location: string;
+  urgency: string;
+  families: number;
+  items: { name: string; qty: number }[];
+};
+
+type Message = {
+  id: string;
+  type: string;
+  source: string;
+  time: string;
+  content: string;
+  status: "needs_processing" | "processed" | "fulfilled";
+  extractedData: ExtractedData | null;
+};
 
 export function Inbox() {
-  const [messages, setMessages] = useState(INITIAL_MESSAGES);
+  const [messages, setMessages] = useState<Message[]>([]);
+  const [processingIds, setProcessingIds] = useState<Set<string>>(new Set());
   const processingRefs = useRef<Set<string>>(new Set());
 
   useEffect(() => {
-    messages.forEach((msg) => {
-      if (msg.status === 'needs_processing' && !processingRefs.current.has(msg.id)) {
-        processingRefs.current.add(msg.id);
+    fetch('/api/messages')
+      .then(r => r.json())
+      .then((data: Message[]) => setMessages(data))
+      .catch(console.error);
+  }, []);
 
-        const processMessage = async () => {
-          try {
-            const response = await fetch('/api/process_message', {
-              method: 'POST',
-              headers: {
-                'Content-Type': 'application/json',
-              },
-              body: JSON.stringify({ content: msg.content }),
-            });
+  const triggerProcess = useCallback((msg: Message) => {
+    if (processingRefs.current.has(msg.id)) return;
+    processingRefs.current.add(msg.id);
+    setProcessingIds((prev: Set<string>) => new Set([...prev, msg.id]));
 
-            if (!response.ok) {
-              throw new Error(`Error processing message: ${response.statusText}`);
-            }
+    fetch('/api/process_message', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content: msg.content, id: msg.id }),
+    })
+      .then((r: Response) => {
+        if (!r.ok) throw new Error(r.statusText);
+        return r.json();
+      })
+      .then((data: ExtractedData) => {
+        setMessages((prev: Message[]) => prev.map((m: Message) =>
+          m.id === msg.id ? { ...m, status: "processed", extractedData: data } : m
+        ));
+      })
+      .catch((err: unknown) => console.error("Failed to extract data:", err))
+      .finally(() => {
+        processingRefs.current.delete(msg.id);
+        setProcessingIds((prev: Set<string>) => {
+          const next = new Set(prev);
+          next.delete(msg.id);
+          return next;
+        });
+      });
+  }, []);
 
-            const data = await response.json();
-            
-            setMessages(prev => prev.map(m => 
-              m.id === msg.id ? { ...m, status: "processed", extractedData: data } : m
-            ));
-          } catch (error) {
-            console.error("Failed to extract data:", error);
-          } finally {
-            processingRefs.current.delete(msg.id);
-          }
-        };
-
-        processMessage();
+  useEffect(() => {
+    messages.forEach((msg: Message) => {
+      if (msg.status === 'needs_processing') {
+        triggerProcess(msg);
       }
     });
-  }, [messages]);
+  }, [messages, triggerProcess]);
 
   const handleUpdateField = (id: string, field: string, value: any) => {
     setMessages(prev => prev.map(m => {
@@ -134,6 +107,15 @@ export function Inbox() {
       }
       return m;
     }));
+  };
+
+  const handleFulfill = async (id: string) => {
+    await fetch(`/api/messages/${id}/status`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status: 'fulfilled' }),
+    });
+    setMessages(prev => prev.filter(m => m.id !== id));
   };
 
   const handleAddItem = (id: string) => {
@@ -222,9 +204,18 @@ export function Inbox() {
                         <AlertCircle className="w-4 h-4" />
                         Needs processing
                       </div>
-                      <div className="px-4 py-2 bg-surface-container text-on-surface-variant rounded-lg text-sm font-bold shadow-sm flex items-center gap-2">
-                        <Loader2 className="w-4 h-4 animate-spin" /> Processing AI...
-                      </div>
+                      {processingIds.has(message.id) ? (
+                        <div className="px-4 py-2 bg-surface-container text-on-surface-variant rounded-lg text-sm font-bold shadow-sm flex items-center gap-2">
+                          <Loader2 className="w-4 h-4 animate-spin" /> Processing AI...
+                        </div>
+                      ) : (
+                        <button
+                          onClick={() => triggerProcess(message)}
+                          className="px-4 py-2 bg-primary/10 text-primary border border-primary/30 rounded-lg text-sm font-bold shadow-sm flex items-center gap-2 hover:bg-primary/20 transition-colors"
+                        >
+                          <RefreshCw className="w-4 h-4" /> Reprocess with AI
+                        </button>
+                      )}
                     </div>
                   ) : (
                     <div className="flex items-center justify-between mt-4 border-t border-outline-variant/10 pt-4">
@@ -316,8 +307,11 @@ export function Inbox() {
                             <option value="low">Low</option>
                           </select>
                         </div>
-                        <button className="text-xs font-bold text-primary hover:underline hover:brightness-110">
-                          Add to Live Feed
+                        <button
+                          onClick={() => handleFulfill(message.id)}
+                          className="text-xs font-bold text-primary hover:underline hover:brightness-110 flex items-center gap-1"
+                        >
+                          <CheckCircle2 className="w-3.5 h-3.5" /> Mark Fulfilled
                         </button>
                       </div>
                     </div>
