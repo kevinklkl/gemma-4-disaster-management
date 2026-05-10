@@ -1,5 +1,7 @@
 import asyncio
+import csv
 import json
+import os
 import sqlite3
 import time
 from contextlib import contextmanager
@@ -9,7 +11,7 @@ from fastapi import FastAPI, Request, HTTPException, BackgroundTasks, WebSocket,
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-from engine.ollama_client import call_ollama
+from engine.ollama_client import call_ollama, call_ollama_batch, ollama_lock, _request_single, _request_batch
 from prompts.extraction_prompt import GEMMA_PROMPT_TEMPLATE
 
 app = FastAPI()
@@ -89,6 +91,15 @@ _event_loop = None
 async def _store_loop():
     global _event_loop
     _event_loop = asyncio.get_event_loop()
+    # Requeue any messages left as needs_processing from before a server restart
+    with get_db() as conn:
+        stuck = conn.execute(
+            "SELECT id, message FROM messages WHERE status = 'needs_processing'"
+        ).fetchall()
+    if stuck:
+        print(f"[startup] requeueing {len(stuck)} stuck messages")
+        import threading
+        threading.Thread(target=_run_gemma_bg, args=(stuck[0]["id"], stuck[0]["message"]), daemon=True).start()
 
 
 def _broadcast_sync(payload: dict):
@@ -133,46 +144,183 @@ def _parse_gemma_response(text: str) -> dict:
     return json.loads(text)
 
 
+def _parse_batch_response(text: str) -> list:
+    """Extract a JSON array from a free-text batch response."""
+    original = text
+    text = text.strip()
+    # Strip markdown fences
+    if text.startswith("```json"):
+        text = text[7:]
+    if text.startswith("```"):
+        text = text[3:]
+    if text.endswith("```"):
+        text = text[:-3]
+    text = text.strip()
+    # Find the outermost [...] array
+    start = text.find("[")
+    end = text.rfind("]")
+    if start == -1 or end == -1 or end <= start:
+        print(f"[batch parse] no array found in response ({len(original)} chars): {repr(original[:300])}")
+        return []
+    try:
+        parsed = json.loads(text[start:end + 1])
+    except json.JSONDecodeError as e:
+        print(f"[batch parse] JSON error: {e} — response: {repr(text[start:start+300])}")
+        return []
+    if isinstance(parsed, list):
+        return parsed
+    # Model wrapped it: {"results": [...]}
+    if isinstance(parsed, dict):
+        for v in parsed.values():
+            if isinstance(v, list):
+                return v
+    return []
+
+
 def _run_gemma_bg(msg_id: int, content: str):
-    """Background task: run Gemma extraction and persist result to DB."""
+    """Wait for the Ollama lock, then sweep the DB for all queued messages and batch them."""
+    with ollama_lock:
+        # We now hold the lock — any tasks that queued up while we were waiting
+        # will have their messages sitting as needs_processing in the DB.
+        started_at = datetime.now(timezone.utc)
+        with get_db() as conn:
+            rows = conn.execute(
+                "SELECT id, message FROM messages WHERE status = 'needs_processing' LIMIT ?",
+                (BATCH_SIZE,)
+            ).fetchall()
+            if not rows:
+                return  # Another worker already processed everything
+            all_ids = [r["id"] for r in rows]
+            all_contents = [r["message"] for r in rows]
+            conn.execute(
+                f"UPDATE messages SET status = 'processing', processing_started_at = ? "
+                f"WHERE id IN ({','.join('?' * len(all_ids))})",
+                [started_at.isoformat()] + all_ids
+            )
+            conn.commit()
+
+        for mid in all_ids:
+            _broadcast_sync({"type": "processing_started", "msgId": str(mid), "startedAt": started_at.isoformat()})
+
+        try:
+            if len(all_ids) == 1:
+                t0 = time.perf_counter()
+                result = _request_single(GEMMA_PROMPT_TEMPLATE.format(content=all_contents[0]), temperature=0.1)
+                t1 = time.perf_counter()
+                data = _parse_gemma_response(result.response)
+                t2 = time.perf_counter()
+                duration_ms = int((datetime.now(timezone.utc) - started_at).total_seconds() * 1000)
+                with get_db() as conn:
+                    conn.execute(
+                        "UPDATE messages SET extracted_data = ?, status = 'processed', processing_duration_ms = ? WHERE id = ?",
+                        (json.dumps(data), duration_ms, all_ids[0])
+                    )
+                    conn.commit()
+                t3 = time.perf_counter()
+                _broadcast_sync({"type": "processing_done", "msgId": str(all_ids[0]), "durationMs": duration_ms, "extractedData": data})
+                t4 = time.perf_counter()
+                print(
+                    f"[msg {all_ids[0]}] total={duration_ms}ms"
+                    f"  ollama={1000*(t1-t0):.0f}ms"
+                    f"  parse={1000*(t2-t1):.0f}ms"
+                    f"  db={1000*(t3-t2):.0f}ms"
+                    f"  broadcast={1000*(t4-t3):.0f}ms"
+                    f"  [{result.timing_summary()}]"
+                )
+            else:
+                t0 = time.perf_counter()
+                result = _request_batch(all_contents, temperature=0.0)
+                t1 = time.perf_counter()
+                items = _parse_batch_response(result.response)
+                t2 = time.perf_counter()
+                duration_ms = int((datetime.now(timezone.utc) - started_at).total_seconds() * 1000)
+                with get_db() as conn:
+                    for i, mid in enumerate(all_ids):
+                        if i < len(items):
+                            data = items[i]
+                            conn.execute(
+                                "UPDATE messages SET extracted_data = ?, status = 'processed', processing_duration_ms = ? WHERE id = ?",
+                                (json.dumps(data), duration_ms, mid)
+                            )
+                            _broadcast_sync({"type": "processing_done", "msgId": str(mid), "durationMs": duration_ms, "extractedData": data})
+                        else:
+                            conn.execute("UPDATE messages SET status = 'needs_processing' WHERE id = ?", (mid,))
+                    conn.commit()
+                t3 = time.perf_counter()
+                filled = min(len(items), len(all_ids))
+                print(
+                    f"[batch {filled}/{len(all_ids)} msgs] total={duration_ms}ms"
+                    f"  ollama={1000*(t1-t0):.0f}ms"
+                    f"  parse={1000*(t2-t1):.0f}ms"
+                    f"  db={1000*(t3-t2):.0f}ms"
+                    f"  [{result.timing_summary()}]"
+                )
+        except Exception as e:
+            with get_db() as conn:
+                for mid in all_ids:
+                    conn.execute("UPDATE messages SET status = 'needs_processing' WHERE id = ?", (mid,))
+                conn.commit()
+            print(f"Gemma failed for messages {all_ids}: {e}")
+
+
+BATCH_SIZE = 10
+BATCH_THRESHOLD = 2
+
+
+def _run_gemma_batch(msg_ids: list, contents: list):
+    """Single Ollama call for up to BATCH_SIZE messages; response is a JSON array."""
     started_at = datetime.now(timezone.utc)
+    n = len(msg_ids)
+
     with get_db() as conn:
-        conn.execute(
-            "UPDATE messages SET status = 'processing', processing_started_at = ? WHERE id = ?",
-            (started_at.isoformat(), msg_id)
-        )
+        for msg_id in msg_ids:
+            conn.execute(
+                "UPDATE messages SET status = 'processing', processing_started_at = ? WHERE id = ?",
+                (started_at.isoformat(), msg_id)
+            )
         conn.commit()
-    _broadcast_sync({"type": "processing_started", "msgId": str(msg_id), "startedAt": started_at.isoformat()})
+    for msg_id in msg_ids:
+        _broadcast_sync({"type": "processing_started", "msgId": str(msg_id), "startedAt": started_at.isoformat()})
 
     try:
         t0 = time.perf_counter()
-        result = call_ollama(GEMMA_PROMPT_TEMPLATE.format(content=content), temperature=0.1)
+        result = call_ollama_batch(contents)
         t1 = time.perf_counter()
-        data = _parse_gemma_response(result.response)
+
+        items = _parse_batch_response(result.response)
+
         t2 = time.perf_counter()
         duration_ms = int((datetime.now(timezone.utc) - started_at).total_seconds() * 1000)
+
         with get_db() as conn:
-            conn.execute(
-                "UPDATE messages SET extracted_data = ?, status = 'processed', processing_duration_ms = ? WHERE id = ?",
-                (json.dumps(data), duration_ms, msg_id)
-            )
+            for i, msg_id in enumerate(msg_ids):
+                if i < len(items):
+                    data = items[i]
+                    conn.execute(
+                        "UPDATE messages SET extracted_data = ?, status = 'processed', processing_duration_ms = ? WHERE id = ?",
+                        (json.dumps(data), duration_ms, msg_id)
+                    )
+                    _broadcast_sync({"type": "processing_done", "msgId": str(msg_id), "durationMs": duration_ms, "extractedData": data})
+                else:
+                    # Truncated — fall back to individual processing
+                    conn.execute("UPDATE messages SET status = 'needs_processing' WHERE id = ?", (msg_id,))
             conn.commit()
         t3 = time.perf_counter()
-        _broadcast_sync({"type": "processing_done", "msgId": str(msg_id), "durationMs": duration_ms, "extractedData": data})
-        t4 = time.perf_counter()
+
+        filled = min(len(items), n)
         print(
-            f"[msg {msg_id}] total={duration_ms}ms"
+            f"[batch {filled}/{n} msgs] total={duration_ms}ms"
             f"  ollama={1000*(t1-t0):.0f}ms"
             f"  parse={1000*(t2-t1):.0f}ms"
             f"  db={1000*(t3-t2):.0f}ms"
-            f"  broadcast={1000*(t4-t3):.0f}ms"
             f"  [{result.timing_summary()}]"
         )
     except Exception as e:
         with get_db() as conn:
-            conn.execute("UPDATE messages SET status = 'needs_processing' WHERE id = ?", (msg_id,))
+            for msg_id in msg_ids:
+                conn.execute("UPDATE messages SET status = 'needs_processing' WHERE id = ?", (msg_id,))
             conn.commit()
-        print(f"Background Gemma failed for message {msg_id}: {e}")
+        print(f"Batch Gemma failed for messages {msg_ids}: {e}")
 
 
 class ProcessRequest(BaseModel):
@@ -289,9 +437,58 @@ def get_messages():
     return [row_to_message(r) for r in rows]
 
 
+SYNTHETIC_CSV = os.path.join(os.path.dirname(__file__), "..", "data", "synthetic_demand_messages.csv")
+
+
+@app.post("/api/seed-inbox")
+def seed_inbox(background_tasks: BackgroundTasks):
+    csv_path = os.path.normpath(SYNTHETIC_CSV)
+    if not os.path.exists(csv_path):
+        raise HTTPException(status_code=404, detail=f"CSV not found: {csv_path}")
+
+    received_at = datetime.now(timezone.utc).isoformat()
+    inserted = []
+    with open(csv_path, newline="", encoding="utf-8") as f:
+        reader = csv.DictReader(f)
+        with get_db() as conn:
+            for row in reader:
+                content = row.get("message", "").strip()
+                if not content:
+                    continue
+                cur = conn.execute(
+                    "INSERT INTO messages (sender, message, received_at, source, raw_payload, status, message_type) "
+                    "VALUES (?, ?, ?, 'synthetic', '{}', 'needs_processing', 'sms')",
+                    ("Synthetic", content, received_at)
+                )
+                inserted.append((cur.lastrowid, content))
+            conn.commit()
+
+    # Mark all as processing immediately so the frontend doesn't auto-trigger
+    # individual /api/process_message calls before the batch tasks run.
+    if len(inserted) > BATCH_THRESHOLD:
+        started_at = received_at
+        with get_db() as conn:
+            for msg_id, _ in inserted:
+                conn.execute(
+                    "UPDATE messages SET status = 'processing', processing_started_at = ? WHERE id = ?",
+                    (started_at, msg_id)
+                )
+            conn.commit()
+
+    if len(inserted) > BATCH_THRESHOLD:
+        for i in range(0, len(inserted), BATCH_SIZE):
+            chunk = inserted[i:i + BATCH_SIZE]
+            background_tasks.add_task(_run_gemma_batch, [x[0] for x in chunk], [x[1] for x in chunk])
+    else:
+        for msg_id, content in inserted:
+            background_tasks.add_task(_run_gemma_bg, msg_id, content)
+
+    return {"ok": True, "queued": len(inserted)}
+
+
 @app.patch("/api/messages/{message_id}/status")
 def update_status(message_id: int, body: StatusUpdate):
-    allowed = {"needs_processing", "processed", "fulfilled"}
+    allowed = {"needs_processing", "processing", "processed", "fulfilled", "failed"}
     if body.status not in allowed:
         raise HTTPException(status_code=400, detail=f"status must be one of {allowed}")
     with get_db() as conn:

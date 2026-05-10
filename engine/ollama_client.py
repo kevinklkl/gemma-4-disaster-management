@@ -5,9 +5,8 @@ import requests
 OLLAMA_URL = "http://localhost:11434/api/generate"
 MODEL_NAME = "gemma4:e4b"
 
-# Only one Ollama call runs at a time; extras wait in line instead of all
-# hitting the model simultaneously and causing timeouts.
-_semaphore = threading.Semaphore(1)
+# Exported so api.py can acquire it before sweeping the DB for batch partners.
+ollama_lock = threading.Semaphore(1)
 
 
 @dataclass
@@ -35,27 +34,7 @@ class OllamaResult:
         )
 
 
-def call_ollama(prompt: str, temperature: float = 0.1) -> OllamaResult:
-    with _semaphore:
-        response = requests.post(
-            OLLAMA_URL,
-            json={
-                "model": MODEL_NAME,
-                "prompt": prompt,
-                "stream": False,
-                "format": "json",
-                "keep_alive": "30m",
-                "options": {
-                    "temperature": temperature,
-                    "num_ctx": 1024,
-                    "num_predict": 120,
-                },
-            },
-            timeout=90,
-        )
-        response.raise_for_status()
-        body = response.json()
-
+def _build_result(body: dict) -> OllamaResult:
     ns = 1_000_000  # nanoseconds → milliseconds
     return OllamaResult(
         response=body["response"],
@@ -66,3 +45,61 @@ def call_ollama(prompt: str, temperature: float = 0.1) -> OllamaResult:
         prompt_tokens=body.get("prompt_eval_count", 0),
         eval_tokens=body.get("eval_count", 0),
     )
+
+
+def _request_single(prompt: str, temperature: float) -> OllamaResult:
+    """HTTP call for one message. Caller must hold ollama_lock."""
+    response = requests.post(
+        OLLAMA_URL,
+        json={
+            "model": MODEL_NAME,
+            "prompt": prompt,
+            "stream": False,
+            "format": "json",
+            "keep_alive": "30m",
+            "options": {
+                "temperature": temperature,
+                "num_ctx": 2048,
+                "num_predict": 80,
+            },
+        },
+        timeout=90,
+    )
+    response.raise_for_status()
+    return _build_result(response.json())
+
+
+def _request_batch(messages: list[str], temperature: float) -> OllamaResult:
+    """HTTP call for multiple messages. Caller must hold ollama_lock."""
+    from prompts.extraction_prompt import GEMMA_BATCH_PROMPT_TEMPLATE
+    n = len(messages)
+    numbered = "\n".join(f"{i + 1}: {msg}" for i, msg in enumerate(messages))
+    prompt = GEMMA_BATCH_PROMPT_TEMPLATE.format(n=n, numbered_messages=numbered)
+    response = requests.post(
+        OLLAMA_URL,
+        json={
+            "model": MODEL_NAME,
+            "prompt": prompt,
+            "stream": False,
+            "think": False,
+            "keep_alive": "30m",
+            "options": {
+                "temperature": temperature,
+                "num_ctx": 2048,
+                "num_predict": min(n * 120, 2000),
+            },
+        },
+        timeout=240,
+    )
+    response.raise_for_status()
+    return _build_result(response.json())
+
+
+def call_ollama(prompt: str, temperature: float = 0.1) -> OllamaResult:
+    with ollama_lock:
+        return _request_single(prompt, temperature)
+
+
+def call_ollama_batch(messages: list[str], temperature: float = 0.0) -> OllamaResult:
+    with ollama_lock:
+        return _request_batch(messages, temperature)

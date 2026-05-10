@@ -1,8 +1,27 @@
+import { useState } from "react";
 import { Link } from "react-router-dom";
-import { ArrowLeft, HelpCircle, Keyboard, Mic, Camera, Mail } from "lucide-react";
+import { ArrowLeft, HelpCircle, Keyboard, Mic, Camera, Mail, FlaskConical, Loader2, CheckCircle2 } from "lucide-react";
 import { MobileNav } from "../components/MobileNav";
 
 export function IntakeChannelSelector() {
+  const [seeding, setSeeding] = useState(false);
+  const [seeded, setSeeded] = useState<number | null>(null);
+
+  const handleSeedInbox = async () => {
+    setSeeding(true);
+    setSeeded(null);
+    try {
+      const res = await fetch("/api/seed-inbox", { method: "POST" });
+      if (!res.ok) throw new Error();
+      const data = await res.json();
+      setSeeded(data.queued);
+    } catch {
+      setSeeded(-1);
+    } finally {
+      setSeeding(false);
+    }
+  };
+
   return (
     <div className="flex flex-col min-h-screen">
       <header className="flex justify-between items-center w-full px-6 py-4 sticky top-0 z-50 bg-surface dark:bg-inverse-surface shadow-sm">
@@ -57,7 +76,23 @@ export function IntakeChannelSelector() {
           </button>
         </div>
 
-        <section className="mt-12 p-6 rounded-xl bg-surface-container-highest/40 border border-outline-variant/20 flex items-center justify-between">
+        <button
+          onClick={handleSeedInbox}
+          disabled={seeding}
+          className="mt-8 w-full flex items-center gap-4 px-5 py-4 rounded-xl border border-dashed border-outline-variant/50 bg-surface-container-low hover:bg-surface-container-high transition-all active:scale-[0.98] disabled:opacity-50"
+        >
+          <div className="flex items-center justify-center w-10 h-10 rounded-full bg-secondary/10 text-secondary shrink-0">
+            {seeding ? <Loader2 className="w-5 h-5 animate-spin" /> : seeded !== null && seeded >= 0 ? <CheckCircle2 className="w-5 h-5" /> : <FlaskConical className="w-5 h-5" />}
+          </div>
+          <div className="text-left">
+            <p className="font-bold text-on-surface text-sm">Load synthetic messages</p>
+            <p className="text-xs text-on-surface-variant">
+              {seeding ? "Sending to inbox…" : seeded !== null && seeded >= 0 ? `${seeded} messages queued for processing` : seeded === -1 ? "Failed — check server" : "Send test dataset to inbox"}
+            </p>
+          </div>
+        </button>
+
+        <section className="mt-6 p-6 rounded-xl bg-surface-container-highest/40 border border-outline-variant/20 flex items-center justify-between">
           <div className="flex items-center gap-4">
             <div className="flex items-center justify-center w-10 h-10 rounded-full bg-primary/10">
               <Mail className="text-primary w-5 h-5" />
