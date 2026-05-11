@@ -228,7 +228,7 @@ def _run_gemma_bg(msg_id: int, content: str):
                 with get_db() as conn:
                     for i, mid in enumerate(all_ids):
                         if i < len(items):
-                            data = items[i]
+                            data = validate_and_canonicalize(items[i])
                             conn.execute(
                                 "UPDATE messages SET extracted_data = ?, status = 'processed', processing_duration_ms = ? WHERE id = ?",
                                 (json.dumps(data), duration_ms, mid)
@@ -286,7 +286,7 @@ def _run_gemma_batch(msg_ids: list, contents: list):
         with get_db() as conn:
             for i, msg_id in enumerate(msg_ids):
                 if i < len(items):
-                    data = items[i]
+                    data = validate_and_canonicalize(items[i])
                     conn.execute(
                         "UPDATE messages SET extracted_data = ?, status = 'processed', processing_duration_ms = ? WHERE id = ?",
                         (json.dumps(data), duration_ms, msg_id)
