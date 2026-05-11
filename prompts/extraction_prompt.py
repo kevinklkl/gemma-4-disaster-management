@@ -1,15 +1,13 @@
 """Extraction prompt for Gemma.
 
+Optimized for edge inference and maximum KV cache retention.
 The prompt is assembled from three pieces:
-  1. Static instructions (urgency rubric, persons rule, output schema).
-  2. The canonical-item vocabulary, rendered from `engine.inventory.catalog`
-     so the prompt and the post-process matcher always agree.
-  3. Few-shot examples that demonstrate Taglish / code-switched input.
+  1. Static instructions (urgency rubric, rules, minified output schema).
+  2. The canonical-item vocabulary, rendered dynamically from `CATALOG`.
+  3. Few-shot examples demonstrating Taglish input and minified JSON output.
 
-Call `build_extraction_prompt(content)` to get the full string to send to
-Ollama for single-message extraction. For high-throughput batch extraction
-(seed-inbox sweeps, queued backlog drains) we use the leaner
-`GEMMA_BATCH_PROMPT_TEMPLATE` — fewer tokens per message, simpler schema.
+Call `build_extraction_prompt(content)` for single-message extraction.
+For high-throughput sweeps, use `GEMMA_BATCH_PROMPT_TEMPLATE`.
 """
 
 from __future__ import annotations
@@ -17,98 +15,158 @@ from __future__ import annotations
 from engine.inventory.catalog import CATALOG
 
 
-def _render_catalog_lines() -> str:
-    """One line per canonical key: `key — top synonyms`.
+def _is_tagalog_word(word: str) -> bool:
+    """Heuristic to detect Tagalog/Bisaya words for prioritized prompt rendering."""
+    # Common Tagalog and Bisaya grammatical markers
+    local_markers = {
+        "ng", "mga", "ang", "sa", "kay", "nang", "po", "ho", "na", "pa", 
+        "din", "rin", "daw", "raw", "naman", "ni", "ug", "ang" # 'ug' is Bisaya 'and'
+    }
+    
+    word_lower = word.lower().strip(".,!?;:()[]\"'")
+    
+    # Expanded Disaster & Logistics Lexicon (Tagalog + Common Bisaya)
+    local_roots = {
+        # Food & Water
+        "tubig", "bigas", "delata", "kain", "inom", "ulam", "gatas", "kape", 
+        "noodles", "sardinas", "tinapay", "gutom", "uhaw", "pagkaon", # pagkaon = food (Bisaya)
+        
+        # Medical & Hygiene
+        "sakit", "gamot", "sugat", "lagnat", "ubo", "sipon", "hugas", 
+        "pampers", "diaper", "napkin", "sabon", "tambal", # tambal = medicine (Bisaya)
+        
+        # Shelter & Supplies
+        "bahay", "banig", "kumot", "trapal", "tent", "bubong", "damit", 
+        "tsinelas", "balay", # balay = house (Bisaya)
+        
+        # People & Vulnerable Groups
+        "bata", "matanda", "lola", "lolo", "pamilya", "tao", "katao", 
+        "nanay", "tatay", "buntis", "sanggol", "pilay", "aso", "pusa", "iro",
+        
+        # Action, Status, & Emergency
+        "tulong", "bigay", "padala", "kailangan", "ubos", "sira", "baha", 
+        "lunod", "tabang", "wala", "dami", "konti" # tabang = help (Bisaya)
+    }
+    
+    # Check if it's an exact match for a marker or root
+    if word_lower in local_markers or word_lower in local_roots:
+        return True
+        
+    # Check for common Tagalog verbal/adjective affixes
+    affixes = ["-in", "-an", "mag-", "nag-", "pa-", "pinag-", "naka-", "pang-", "ma-"]
+    has_affix = any(affix in word_lower for affix in affixes)
+    
+    # Prevent false positives where English words happen to contain "-in" (like "medicine" or "origin")
+    # We only trigger the affix rule if the string actually starts/ends with the hyphenated affix
+    if has_affix:
+        for affix in affixes:
+            if affix.endswith("-") and word_lower.startswith(affix.strip("-")):
+                return True
+            if affix.startswith("-") and word_lower.endswith(affix.strip("-")):
+                return True
 
-    Keep this concise; we send it on every request and prompt tokens cost
-    eval time. Show 4-6 synonyms per item, prioritizing Tagalog + the most
-    common English forms.
-    """
+    return False
+
+def _get_disambiguation_hint(key: str, catalog: dict) -> str | None:
+    """Return short hint if key has semantically similar siblings."""
+    disambig_map = {
+        "diapers_baby": "for infants",
+        "diapers_adult": "for elderly/PWD", 
+        "water_drinking": "for consumption",
+        "water_cleaning": "for hygiene/cleaning",
+        "rice": "uncooked grain",
+        "rice_cooked": "prepared meal",
+        "canned_goods": "sardines, tuna, meat in can",
+        "canned_vegetables": "corn, beans, veggies in can",
+        "milk_adult": "nutritional drink for adults",
+        "infant_formula": "baby milk/formula",
+    }
+    return disambig_map.get(key)
+
+
+def _render_catalog_lines() -> str:
+    """One line per canonical key: `key — top synonyms`."""
     lines: list[str] = []
     for key, entry in CATALOG.items():
-        # Top synonyms first, deduped against the key/label.
         seen = {key.lower(), entry["label"].lower()}
         chosen: list[str] = []
-        for syn in entry["synonyms"]:
+        
+        # Prioritize: Tagalog synonyms first, then English, then variants
+        tagalog_sims = [s for s in entry["synonyms"] if _is_tagalog_word(s) and s.lower() not in seen]
+        english_sims = [s for s in entry["synonyms"] if s.lower() not in seen and s not in tagalog_sims]
+        
+        for syn in tagalog_sims + english_sims:
             s = syn.lower()
             if s in seen:
                 continue
             seen.add(s)
             chosen.append(syn)
-            if len(chosen) >= 5:
+            if len(chosen) >= 6:
                 break
+                
+        hint = _get_disambiguation_hint(key, CATALOG)
         synonyms = ", ".join(chosen) if chosen else entry["label"]
-        lines.append(f"  {key} — {synonyms}")
+        line_suffix = f" ({hint})" if hint else ""
+        lines.append(f"  {key} — {synonyms}{line_suffix}")
     return "\n".join(lines)
+
+
+_INSTRUCTIONS_HEADER = """\
+Extract relief needs from disaster messages (Tagalog, English, Taglish).
+Return compact valid JSON only. No markdown. No explanation.
+
+SCHEMA:
+{"loc":<str|null>,"urg":"L|M|H|C","pax":<int|null>,"items":[{"txt":<str>,"can":<key|null>,"qty":<int|null>,"u":<str|null>}]}
+
+CANONICAL ITEMS: Match the closest key below. If nothing fits, use null.
+"""
+
+
+_INSTRUCTIONS_FOOTER = """\
+URGENCY (urg):
+ C — critical: life-threatening, trapped, medical emergency
+ H — high: no food/water 24h+, sick, urgent evacuation
+ M — medium: running low, evacuated but stable
+ L — low: pre-positioning, donation, inquiry
+
+RULES:
+- pax: Total people (1 pamilya ≈ 5 persons).
+- txt: EXACT phrase from message.
+- can: MUST match a key exactly, or null. Split compound requests.
+- qty: INT only. Extract only if explicit.
+- u: EXACT unit (cans, sacks, L, packs). null if unspecified.
+- Empty items [] is valid if no specific physical goods are requested.
+"""
 
 
 _FEW_SHOT_EXAMPLES = """\
 EXAMPLES:
 
 Message: "Brgy 7 San Jose, kailangan namin ng tubig at bigas para sa 50 katao. Walang kuryente, may mga matanda."
-JSON: {"location":"Brgy 7 San Jose","urgency":"high","persons":50,"items":[{"raw_text":"tubig","canonical":"water_drinking","qty":null,"unit":null},{"raw_text":"bigas","canonical":"rice","qty":null,"unit":null}]}
+JSON: {"loc":"Brgy 7 San Jose","urg":"H","pax":50,"items":[{"txt":"tubig","can":"water_drinking","qty":null,"u":null},{"txt":"bigas","can":"rice","qty":null,"u":null}]}
 
 Message: "send 100 cans of sardines and 5 sacks of rice to evacuation center in Tacloban asap please"
-JSON: {"location":"Tacloban","urgency":"high","persons":null,"items":[{"raw_text":"sardines","canonical":"canned_goods","qty":100,"unit":"cans"},{"raw_text":"rice","canonical":"rice","qty":5,"unit":"sacks"}]}
-
-Message: "hi po may delata ako 20 cans pwede po idonate"
-JSON: {"location":null,"urgency":"low","persons":null,"items":[{"raw_text":"delata","canonical":"canned_goods","qty":20,"unit":"cans"}]}
+JSON: {"loc":"Tacloban","urg":"H","pax":null,"items":[{"txt":"sardines","can":"canned_goods","qty":100,"u":"cans"},{"txt":"rice","can":"rice","qty":5,"u":"sacks"}]}
 
 Message: "TULONG! Naipit kami sa Brgy Bagumbayan, may mga bata at lola, walang makain 2 days na"
-JSON: {"location":"Brgy Bagumbayan","urgency":"critical","persons":null,"items":[]}
+JSON: {"loc":"Brgy Bagumbayan","urg":"C","pax":null,"items":[]}
 
 Message: "need diapers and milk for 3 babies and adult pampers for lola"
-JSON: {"location":null,"urgency":"high","persons":4,"items":[{"raw_text":"diapers","canonical":"diapers_baby","qty":null,"unit":null},{"raw_text":"milk for babies","canonical":"infant_formula","qty":null,"unit":null},{"raw_text":"adult pampers","canonical":"diapers_adult","qty":null,"unit":null}]}
+JSON: {"loc":null,"urg":"H","pax":4,"items":[{"txt":"diapers","can":"diapers_baby","qty":null,"u":null},{"txt":"milk for babies","can":"infant_formula","qty":null,"u":null},{"txt":"adult pampers","can":"diapers_adult","qty":null,"u":null}]}
 
 Message: "naka-evacuate na kami sa school. 3 pamilya kami dito, kailangan ng banig at kumot pang gabi"
-JSON: {"location":"school","urgency":"medium","persons":15,"items":[{"raw_text":"banig","canonical":"sleeping_mat","qty":null,"unit":null},{"raw_text":"kumot","canonical":"blanket","qty":null,"unit":null}]}
-"""
+JSON: {"loc":"school","urg":"M","pax":15,"items":[{"txt":"banig","can":"sleeping_mat","qty":null,"u":null},{"txt":"kumot","can":"blanket","qty":null,"u":null}]}
 
-
-_INSTRUCTIONS_HEADER = """\
-You extract relief needs from disaster messages written in Tagalog, English,
-or mixed Taglish (code-switching is normal). Return compact valid JSON only.
-No markdown. No explanation. No prose before or after.
-
-OUTPUT SCHEMA:
-{"location":<string|null>,"urgency":"low|medium|high|critical","persons":<int|null>,"items":[{"raw_text":<string>,"canonical":<key|null>,"qty":<int|null>,"unit":<string|null>}]}
-
-CANONICAL ITEMS — pick the key whose synonyms best match each requested item.
-If nothing fits, set "canonical" to null and keep raw_text faithful to the message.
-"""
-
-
-_INSTRUCTIONS_FOOTER = """\
-
-URGENCY:
-  critical — life-threatening NOW: trapped, drowning, medical emergency, no
-             shelter in active storm, "tulong na", "mamamatay na", "naipit"
-  high     — urgent: no food/water for 24h+, sick children/elderly/PWD,
-             immediate evacuation needed
-  medium   — running low / replenishment / evacuated but stable
-  low      — pre-positioning, future need, donation offer, general inquiry
-
-PERSONS:
-  Total people needing help. "tawo" / "katao" = persons.
-  Family-size convention: 1 pamilya / 1 family ≈ 5 persons.
-  Add up explicit demographic mentions (e.g., "3 bata at 2 matanda" = 5).
-  Use null if not stated.
-
-RULES:
-  - raw_text: keep the surface form from the message (Tagalog or English).
-  - canonical: must be one of the keys above, or null.
-  - qty: integer only. If the message says "a few", "marami", "konti", use null.
-  - unit: "cans", "sacks", "kg", "L", "packs", "pcs", "kits", "people", etc.
-    Preserve what the message says; use null if unspecified.
-  - Critical situations with no specific items: items can be an empty list.
-  - Never invent items or quantities not in the message.
+Message: "200 people stranded, need 50 packs of noodles, 30L water, and blankets"
+JSON: {"loc":null,"urg":"C","pax":200,"items":[{"txt":"noodles","can":"canned_goods","qty":50,"u":"packs"},{"txt":"water","can":"water_drinking","qty":30,"u":"L"},{"txt":"blankets","can":"blanket","qty":null,"u":null}]}
 """
 
 
 def build_extraction_prompt(content: str) -> str:
+    """Assembles the prompt. Dynamic content MUST stay at the very bottom for KV caching."""
     return (
         f"{_INSTRUCTIONS_HEADER}"
-        f"{_render_catalog_lines()}\n"
+        f"{_render_catalog_lines()}\n\n"
         f"{_INSTRUCTIONS_FOOTER}\n"
         f"{_FEW_SHOT_EXAMPLES}\n"
         f'Message: "{content}"\n'
@@ -116,12 +174,11 @@ def build_extraction_prompt(content: str) -> str:
     )
 
 
-# Lean batch template — used when many messages share one Ollama call.
-# Schema is intentionally simpler than build_extraction_prompt's output:
-# we trade canonical/unit fidelity for throughput, and the API layer
-# treats batch results as best-effort.
-GEMMA_BATCH_PROMPT_TEMPLATE = """Return a JSON array of exactly {n} objects. No markdown. No explanation.
-Extract relief needs from each numbered message. "tawo" means people. If unknown, use null.
-Object schema: {{"location":null,"urgency":"low|medium|high|critical","persons":null,"items":[{{"name":"string","qty":null}}]}}
+# Lean batch template
+GEMMA_BATCH_PROMPT_TEMPLATE = """Return a JSON object containing a "results" array of exactly {n} objects. No markdown. No explanation.
+Extract relief needs. "tawo" = pax. Unknown = null.
+Schema: {{"results": [{{"loc":null,"urg":"L|M|H|C","pax":null,"items":[{{"txt":"string","qty":null}}]}}]}}
+
 {numbered_messages}
-JSON array:""".strip()
+
+JSON object:""".strip()

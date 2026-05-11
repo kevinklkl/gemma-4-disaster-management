@@ -62,7 +62,7 @@ def _request_single(prompt: str, temperature: float) -> OllamaResult:
                 # build_extraction_prompt is ~1.2-1.5k tokens (catalog + few-shots).
                 "num_ctx": 4096,
                 # Multi-item responses can run long; cap generously.
-                "num_predict": 512,
+                "num_predict": 1024,
             },
         },
         timeout=90,
@@ -83,12 +83,12 @@ def _request_batch(messages: list[str], temperature: float) -> OllamaResult:
             "model": MODEL_NAME,
             "prompt": prompt,
             "stream": False,
-            "think": False,
+            "format": "json",  # <--- ADD THIS
             "keep_alive": "30m",
             "options": {
                 "temperature": temperature,
-                "num_ctx": 2048,
-                "num_predict": min(n * 120, 2000),
+                "num_ctx": 4096,
+                "num_predict": 1024,
             },
         },
         timeout=240,

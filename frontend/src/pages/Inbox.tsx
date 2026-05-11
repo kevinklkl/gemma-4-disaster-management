@@ -9,6 +9,7 @@ type ExtractedItem = {
   canonical?: string | null;
   raw_text?: string | null;
   unit?: string | null;
+  estimated?: boolean;
 };
 
 type ExtractedData = {
@@ -389,12 +390,29 @@ export function Inbox() {
                                 onChange={(e) => handleUpdateItem(message.id, i, "name", e.target.value)}
                                 className="flex-1 bg-surface-container hover:bg-surface-container-high rounded-md px-2 py-1.5 text-sm border-none ring-1 ring-outline-variant/30 focus:ring-primary outline-none text-on-surface font-bold transition-colors"
                               />
-                              <input
-                                type="number"
-                                value={item.qty ?? ""}
-                                onChange={(e) => handleUpdateItem(message.id, i, "qty", e.target.value === "" ? null : Number(e.target.value))}
-                                className="w-16 bg-surface-container hover:bg-surface-container-high rounded-md px-2 py-1.5 text-xs border-none ring-1 ring-outline-variant/30 focus:ring-primary outline-none text-on-surface font-bold transition-colors text-center"
-                              />
+                              {item.unit === "triage" ? (
+                                <span className="px-2 py-1 bg-error/10 text-error text-[10px] font-bold rounded whitespace-nowrap">
+                                  Triage req.
+                                </span>
+                              ) : (
+                                <div className="flex items-center gap-1">
+                                  <input
+                                    type="number"
+                                    value={item.qty ?? ""}
+                                    onChange={(e) => handleUpdateItem(message.id, i, "qty", e.target.value === "" ? null : Number(e.target.value))}
+                                    className={`w-14 rounded-md px-2 py-1.5 text-xs border-none ring-1 outline-none font-bold transition-colors text-center ${
+                                      item.estimated
+                                        ? "bg-primary/8 ring-primary/30 text-primary focus:ring-primary"
+                                        : "bg-surface-container hover:bg-surface-container-high ring-outline-variant/30 focus:ring-primary text-on-surface"
+                                    }`}
+                                  />
+                                  {item.unit && (
+                                    <span className="text-[10px] text-on-surface-variant font-bold whitespace-nowrap min-w-[24px]">
+                                      {item.unit}
+                                    </span>
+                                  )}
+                                </div>
+                              )}
                               <button onClick={() => handleRemoveItem(message.id, i)} className="text-on-surface-variant opacity-0 group-hover:opacity-100 hover:text-error hover:bg-error/10 p-1 rounded transition-all">
                                 <X className="w-4 h-4" />
                               </button>
