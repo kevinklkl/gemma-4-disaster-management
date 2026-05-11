@@ -14,20 +14,25 @@ from __future__ import annotations
 
 from typing import Any, Literal, Optional
 
-from pydantic import BaseModel, Field, ValidationError, field_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 from engine.inventory.catalog import CATALOG, label_for, unit_for
+from engine.inventory.estimator import estimate_needs
 from engine.inventory.matcher import canonicalize
 
 Urgency = Literal["low", "medium", "high", "critical"]
 
+_URGENCY_EXPAND = {"l": "low", "m": "medium", "h": "high", "c": "critical"}
+
 
 class _RawItem(BaseModel):
-    raw_text: Optional[str] = None
-    name: Optional[str] = None  # tolerate the legacy field name
-    canonical: Optional[str] = None
+    model_config = ConfigDict(populate_by_name=True)
+
+    raw_text: Optional[str] = Field(None, alias="txt")
+    name: Optional[str] = None
+    canonical: Optional[str] = Field(None, alias="can")
     qty: Optional[int] = None
-    unit: Optional[str] = None
+    unit: Optional[str] = Field(None, alias="u")
 
     @field_validator("qty", mode="before")
     @classmethod
@@ -44,9 +49,11 @@ class _RawItem(BaseModel):
 
 
 class _RawExtraction(BaseModel):
-    location: Optional[str] = None
-    urgency: Optional[str] = None
-    persons: Optional[int] = None
+    model_config = ConfigDict(populate_by_name=True)
+
+    location: Optional[str] = Field(None, alias="loc")
+    urgency: Optional[str] = Field(None, alias="urg")
+    persons: Optional[int] = Field(None, alias="pax")
     items: list[_RawItem] = Field(default_factory=list)
 
     @field_validator("persons", mode="before")
@@ -68,6 +75,7 @@ _ALLOWED_URGENCY = {"low", "medium", "high", "critical"}
 def _clean_urgency(value: Optional[str]) -> Urgency:
     if value:
         v = value.lower().strip()
+        v = _URGENCY_EXPAND.get(v, v)
         if v in _ALLOWED_URGENCY:
             return v  # type: ignore[return-value]
     return "medium"
@@ -121,15 +129,17 @@ def validate_and_canonicalize(payload: dict) -> dict:
             "canonical": chosen,
             "qty": item.qty,
             "unit": unit,
+            "estimated": False,
         })
 
     location: Optional[str] = None
     if isinstance(raw.location, str) and raw.location.strip():
         location = raw.location.strip()
 
-    return {
+    result = {
         "location": location,
         "urgency": _clean_urgency(raw.urgency),
         "persons": raw.persons,
         "items": cleaned_items,
     }
+    return estimate_needs(result)

@@ -139,34 +139,33 @@ def _parse_batch_response(text: str) -> list:
     """Extract a JSON array from a free-text batch response."""
     original = text
     text = text.strip()
+    
     # Strip markdown fences
-    if text.startswith("```json"):
-        text = text[7:]
-    if text.startswith("```"):
-        text = text[3:]
-    if text.endswith("```"):
-        text = text[:-3]
+    if text.startswith("```json"): text = text[7:]
+    if text.startswith("```"): text = text[3:]
+    if text.endswith("```"): text = text[:-3]
     text = text.strip()
-    # Find the outermost [...] array
-    start = text.find("[")
-    end = text.rfind("]")
+    
+    # Look for the outermost Object {}
+    start = text.find("{")
+    end = text.rfind("}")
+    
     if start == -1 or end == -1 or end <= start:
-        print(f"[batch parse] no array found in response ({len(original)} chars): {repr(original[:300])}")
+        print(f"[batch parse] no object found in response.")
         return []
+        
     try:
+        # Load the whole string between { and }
         parsed = json.loads(text[start:end + 1])
     except json.JSONDecodeError as e:
-        print(f"[batch parse] JSON error: {e} — response: {repr(text[start:start+300])}")
+        print(f"[batch parse] JSON error: {e} — response snippet: {repr(text[start:start+300])}")
         return []
-    if isinstance(parsed, list):
-        return parsed
-    # Model wrapped it: {"results": [...]}
-    if isinstance(parsed, dict):
-        for v in parsed.values():
-            if isinstance(v, list):
-                return v
+        
+    # Extract the array from our "results" wrapper
+    if isinstance(parsed, dict) and "results" in parsed:
+        return parsed["results"]
+        
     return []
-
 
 def _run_gemma_bg(msg_id: int, content: str):
     """Wait for the Ollama lock, then sweep the DB for all queued messages and batch them."""
@@ -223,6 +222,7 @@ def _run_gemma_bg(msg_id: int, content: str):
                 result = _request_batch(all_contents, temperature=0.0)
                 t1 = time.perf_counter()
                 items = _parse_batch_response(result.response)
+                items = [validate_and_canonicalize(item) for item in items]
                 t2 = time.perf_counter()
                 duration_ms = int((datetime.now(timezone.utc) - started_at).total_seconds() * 1000)
                 with get_db() as conn:
@@ -278,7 +278,7 @@ def _run_gemma_batch(msg_ids: list, contents: list):
         result = call_ollama_batch(contents)
         t1 = time.perf_counter()
 
-        items = _parse_batch_response(result.response)
+        items = [validate_and_canonicalize(item) for item in _parse_batch_response(result.response)]
 
         t2 = time.perf_counter()
         duration_ms = int((datetime.now(timezone.utc) - started_at).total_seconds() * 1000)
