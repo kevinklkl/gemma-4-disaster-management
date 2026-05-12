@@ -29,6 +29,14 @@ type Message = {
   extractedData: ExtractedData | null;
   processingStartedAt?: string;
   processingDurationMs?: number;
+  processingNode?: string;
+};
+
+type NodeInfo = {
+  url: string;
+  name: string;
+  busy: boolean;
+  jobs_done: number;
 };
 
 function getElapsedS(startedAt?: string): string {
@@ -47,6 +55,85 @@ export function Inbox() {
   const [, setTick] = useState(0);
   const processingRefs = useRef<Set<string>>(new Set());
   const wsRef = useRef<WebSocket | null>(null);
+  const [joinDismissed, setJoinDismissed] = useState(false);
+  const [joinStatus, setJoinStatus] = useState<"idle" | "joining" | "joined" | "host" | "error">("idle");
+  const [joinError, setJoinError] = useState("");
+  const [joinStep, setJoinStep] = useState<0 | 1 | 2 | 3>(0);
+  const [copied, setCopied] = useState(false);
+  const [joinName, setJoinName] = useState("");
+  const [nodes, setNodes] = useState<NodeInfo[]>([]);
+
+  const ua = navigator.userAgent;
+  const os: "windows" | "mac" = ua.includes("Windows") ? "windows" : "mac";
+  const ollamaCommand = os === "windows"
+    ? "set OLLAMA_HOST=0.0.0.0 && ollama serve"
+    : "OLLAMA_HOST=0.0.0.0 ollama serve";
+  const pasteKey = os === "windows" ? "Ctrl + V" : "⌘ + V";
+
+  const handleCopy = () => {
+    navigator.clipboard.writeText(ollamaCommand).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    });
+  };
+
+  const handleJoin = () => {
+    setJoinStatus("joining");
+    setJoinError("");
+    fetch("/api/nodes", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: joinName.trim() }),
+    })
+      .then(r => { if (!r.ok) throw new Error(); return r.json(); })
+      .then(data => {
+        if (!data.ok) {
+          setJoinStatus("error");
+          setJoinError(
+            data.status === "no_model"
+              ? "This device doesn't have the required AI model installed."
+              : "Couldn't reach Ollama — did you run the command and leave the terminal open?"
+          );
+          return;
+        }
+        setNodes(data.nodes ?? []);
+        setJoinStatus(data.status === "loopback" ? "host" : "joined");
+        setJoinStep(0);
+      })
+      .catch(() => {
+        setJoinStatus("error");
+        setJoinError("Something went wrong. Try again.");
+      });
+  };
+
+  // Auto-detect host: if you're browsing via localhost/127.0.0.1 you're the host machine
+  useEffect(() => {
+    const h = window.location.hostname;
+    if (h === "localhost" || h === "127.0.0.1") setJoinStatus("host");
+  }, []);
+
+  // Restore join status across page reloads / tab switches
+  useEffect(() => {
+    fetch("/api/nodes/me")
+      .then(r => r.json())
+      .then(data => {
+        if (data.registered && !data.isHost) setJoinStatus("joined");
+      })
+      .catch(() => {});
+  }, []);
+
+  // Poll node pool status always
+  useEffect(() => {
+    const poll = () => {
+      fetch("/api/nodes")
+        .then(r => r.json())
+        .then(data => setNodes(data.nodes ?? []))
+        .catch(() => {});
+    };
+    poll();
+    const id = setInterval(poll, 2000);
+    return () => clearInterval(id);
+  }, []);
 
   // Re-render every 100ms to tick elapsed timers while any message is processing
   useEffect(() => {
@@ -76,7 +163,7 @@ export function Inbox() {
         } else if (msg.type === "processing_done") {
           setMessages(prev => prev.map(m =>
             m.id === msg.msgId
-              ? { ...m, status: "processed", processingDurationMs: msg.durationMs, extractedData: msg.extractedData }
+              ? { ...m, status: "processed", processingDurationMs: msg.durationMs, extractedData: msg.extractedData, processingNode: msg.nodeName }
               : m
           ));
           processingRefs.current.delete(msg.msgId);
@@ -141,6 +228,11 @@ export function Inbox() {
 
   const handleRetry = (msg: Message) => {
     setMessages(prev => prev.map(m => m.id === msg.id ? { ...m, status: "needs_processing" } : m));
+  };
+
+  const handleRetryAll = () => {
+    setMessages(prev => prev.map(m => m.status === "failed" ? { ...m, status: "processing" } : m));
+    fetch("/api/retry-failed", { method: "POST" }).catch(console.error);
   };
 
   const handleUpdateField = (id: string, field: string, value: any) => {
@@ -218,10 +310,203 @@ export function Inbox() {
 
   return (
     <div className="h-screen bg-surface-container-low font-body text-on-surface flex flex-col overflow-hidden">
+
+      {/* Step-by-step join wizard */}
+      {joinStep > 0 && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-6">
+          <div className="bg-surface rounded-2xl shadow-2xl w-full max-w-sm flex flex-col gap-6 p-6">
+
+            {/* Header */}
+            <div className="flex items-start justify-between">
+              <div>
+                <p className="text-xs font-bold uppercase tracking-widest text-on-surface-variant mb-1">Add your computer</p>
+                <div className="flex items-center gap-1.5 mt-2">
+                  {[1, 2, 3].map(s => (
+                    <span key={s} className={`h-1.5 rounded-full transition-all duration-300 ${s === joinStep ? "w-8 bg-primary" : s < joinStep ? "w-4 bg-primary/40" : "w-4 bg-outline-variant"}`} />
+                  ))}
+                  <span className="text-xs text-on-surface-variant ml-1">{joinStep} / 3</span>
+                </div>
+              </div>
+              <button onClick={() => setJoinStep(0)}
+                className="text-on-surface-variant hover:text-on-surface p-1 rounded transition-colors">
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Step 1 — Open terminal */}
+            {joinStep === 1 && (
+              <div className="space-y-4">
+                <div>
+                  <h2 className="text-lg font-headline font-bold text-on-surface">Open a terminal</h2>
+                  <p className="text-sm text-on-surface-variant mt-1">A terminal lets you type commands to your computer.</p>
+                </div>
+                {os === "windows" ? (
+                  <div className="space-y-3">
+                    <div className="flex items-center gap-2">
+                      <kbd className="bg-surface-container-high border border-outline-variant rounded-lg px-3 py-2 text-sm font-bold text-on-surface shadow-sm">⊞ Win</kbd>
+                      <span className="text-on-surface-variant font-bold">+</span>
+                      <kbd className="bg-surface-container-high border border-outline-variant rounded-lg px-3 py-2 text-sm font-bold text-on-surface shadow-sm">R</kbd>
+                    </div>
+                    <p className="text-sm text-on-surface">A small box will appear at the bottom of your screen.</p>
+                    <div className="bg-surface-container rounded-xl p-3 flex items-center gap-3">
+                      <span className="text-sm text-on-surface-variant">Type</span>
+                      <code className="bg-surface-container-high rounded px-2 py-1 text-sm font-mono font-bold text-on-surface">cmd</code>
+                      <span className="text-sm text-on-surface-variant">then press Enter</span>
+                    </div>
+                    <p className="text-xs text-on-surface-variant">A black window opens — that's your terminal. ✓</p>
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    <div className="flex items-center gap-2">
+                      <kbd className="bg-surface-container-high border border-outline-variant rounded-lg px-3 py-2 text-sm font-bold text-on-surface shadow-sm">⌘</kbd>
+                      <span className="text-on-surface-variant font-bold">+</span>
+                      <kbd className="bg-surface-container-high border border-outline-variant rounded-lg px-3 py-2 text-sm font-bold text-on-surface shadow-sm">Space</kbd>
+                    </div>
+                    <p className="text-sm text-on-surface">Spotlight search opens at the top of your screen.</p>
+                    <div className="bg-surface-container rounded-xl p-3 flex items-center gap-3">
+                      <span className="text-sm text-on-surface-variant">Type</span>
+                      <code className="bg-surface-container-high rounded px-2 py-1 text-sm font-mono font-bold text-on-surface">Terminal</code>
+                      <span className="text-sm text-on-surface-variant">then press Enter</span>
+                    </div>
+                    <p className="text-xs text-on-surface-variant">A white window opens — that's your terminal. ✓</p>
+                  </div>
+                )}
+                <button onClick={() => setJoinStep(2)}
+                  className="w-full py-3 bg-primary text-on-primary rounded-xl text-sm font-bold hover:brightness-110 transition-all flex items-center justify-center gap-2">
+                  I've opened it <ArrowRight className="w-4 h-4" />
+                </button>
+              </div>
+            )}
+
+            {/* Step 2 — Run command */}
+            {joinStep === 2 && (
+              <div className="space-y-4">
+                <div>
+                  <h2 className="text-lg font-headline font-bold text-on-surface">Run this command</h2>
+                  <p className="text-sm text-on-surface-variant mt-1">This tells Ollama to accept connections from the network.</p>
+                </div>
+                <div className="space-y-3">
+                  <div className="bg-surface-container-high rounded-xl p-3 flex items-center gap-2">
+                    <code className="text-xs font-mono text-on-surface flex-1 break-all leading-relaxed">{ollamaCommand}</code>
+                    <button onClick={handleCopy}
+                      className="shrink-0 flex items-center gap-1 px-2 py-1.5 bg-primary/10 text-primary rounded-lg text-xs font-bold hover:bg-primary/20 transition-all">
+                      {copied ? <><CheckCircle2 className="w-3.5 h-3.5" /> Copied!</> : "Copy"}
+                    </button>
+                  </div>
+                  <ol className="space-y-1.5 text-sm text-on-surface list-none">
+                    <li className="flex items-start gap-2"><span className="text-primary font-bold shrink-0">1.</span> Click <span className="font-bold">Copy</span> above</li>
+                    <li className="flex items-start gap-2"><span className="text-primary font-bold shrink-0">2.</span> Click inside the terminal window</li>
+                    <li className="flex items-start gap-2"><span className="text-primary font-bold shrink-0">3.</span> Press <kbd className="bg-surface-container-high rounded px-1.5 py-0.5 text-xs font-mono">{pasteKey}</kbd> to paste</li>
+                    <li className="flex items-start gap-2"><span className="text-primary font-bold shrink-0">4.</span> Press Enter</li>
+                  </ol>
+                  <div className="bg-secondary/10 border border-secondary/20 rounded-xl px-3 py-2 text-xs text-on-surface-variant">
+                    Leave the terminal window open — don't close it!
+                  </div>
+                </div>
+                <div className="flex gap-2">
+                  <button onClick={() => setJoinStep(1)}
+                    className="flex-1 py-3 bg-surface-container text-on-surface rounded-xl text-sm font-bold hover:bg-surface-container-high transition-all">
+                    ← Back
+                  </button>
+                  <button onClick={() => setJoinStep(3)}
+                    className="flex-[2] py-3 bg-primary text-on-primary rounded-xl text-sm font-bold hover:brightness-110 transition-all flex items-center justify-center gap-2">
+                    It's running <ArrowRight className="w-4 h-4" />
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* Step 3 — Join */}
+            {joinStep === 3 && (
+              <div className="space-y-4">
+                <div>
+                  <h2 className="text-lg font-headline font-bold text-on-surface">You're almost in!</h2>
+                  <p className="text-sm text-on-surface-variant mt-1">Click the button below to add this computer to the processing pool.</p>
+                </div>
+                <div className="bg-surface-container rounded-xl p-4 text-sm text-on-surface-variant space-y-1">
+                  <p>✓ Terminal open</p>
+                  <p>✓ Command running</p>
+                  <p className="text-primary font-bold">→ Click Join to connect</p>
+                </div>
+                <div>
+                  <label className="block text-xs font-bold uppercase tracking-widest text-on-surface-variant mb-1.5">
+                    Name this computer <span className="normal-case font-normal">(optional)</span>
+                  </label>
+                  <input
+                    type="text"
+                    value={joinName}
+                    onChange={e => setJoinName(e.target.value)}
+                    placeholder={os === "mac" ? "Jacob's Mac" : "Jacob's PC"}
+                    className="w-full bg-surface-container-high rounded-xl px-3 py-2.5 text-sm border-none ring-1 ring-outline-variant/30 focus:ring-primary outline-none text-on-surface"
+                  />
+                </div>
+                {joinStatus === "error" && joinError && (
+                  <div className="bg-error/10 border border-error/20 rounded-xl px-3 py-2 text-xs text-error">
+                    {joinError}
+                  </div>
+                )}
+                <div className="flex gap-2">
+                  <button onClick={() => setJoinStep(2)}
+                    className="flex-1 py-3 bg-surface-container text-on-surface rounded-xl text-sm font-bold hover:bg-surface-container-high transition-all">
+                    ← Back
+                  </button>
+                  {joinStatus === "joining" ? (
+                    <div className="flex-[2] py-3 bg-primary text-on-primary rounded-xl text-sm font-bold flex items-center justify-center gap-2">
+                      <Loader2 className="w-4 h-4 animate-spin" /> Joining…
+                    </div>
+                  ) : (
+                    <button onClick={handleJoin}
+                      className="flex-[2] py-3 bg-primary text-on-primary rounded-xl text-sm font-bold hover:brightness-110 transition-all flex items-center justify-center gap-2">
+                      Join as node <ArrowRight className="w-4 h-4" />
+                    </button>
+                  )}
+                </div>
+              </div>
+            )}
+
+          </div>
+        </div>
+      )}
+
       <TopNav />
       <div className="flex flex-1 overflow-hidden">
         <main className="flex-1 overflow-y-auto pb-24 md:pb-8">
           <div className="p-6 max-w-5xl mx-auto space-y-6">
+
+            {!joinDismissed && (
+              <div className="rounded-xl bg-surface-container border border-outline-variant/20 px-5 py-3">
+                <div className="flex items-center justify-between mb-2">
+                  <p className="text-xs font-bold uppercase tracking-widest text-on-surface-variant">Node Pool</p>
+                  <button onClick={() => setJoinDismissed(true)}
+                    className="text-on-surface-variant hover:text-on-surface p-1 rounded">
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  {nodes.map(node => (
+                    <div key={node.url} className="flex items-center gap-2 bg-surface-container-high rounded-lg px-3 py-2">
+                      <span className={`w-2 h-2 rounded-full shrink-0 ${node.busy ? "bg-primary animate-pulse" : "bg-outline-variant"}`} />
+                      <span className="text-xs font-bold text-on-surface">{node.name}</span>
+                      <span className="text-xs text-on-surface-variant">{node.busy ? "processing…" : `${node.jobs_done} done`}</span>
+                    </div>
+                  ))}
+                </div>
+                {joinStatus === "host" && (
+                  <p className="text-xs text-on-surface-variant pt-2 mt-2 border-t border-outline-variant/20">
+                    You're the host — already in pool
+                  </p>
+                )}
+                {joinStatus !== "joined" && joinStatus !== "host" && (
+                  <div className="flex items-center justify-between pt-2 mt-2 border-t border-outline-variant/20">
+                    <p className="text-xs text-on-surface-variant">Want to contribute your computer?</p>
+                    <button onClick={() => setJoinStep(1)}
+                      className="flex items-center gap-1 px-3 py-1.5 bg-primary/10 text-primary rounded-lg text-xs font-bold hover:bg-primary/20 transition-all">
+                      Add your machine <ArrowRight className="w-3 h-3" />
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
 
             <div className="grid grid-cols-3 gap-3">
               <div className="rounded-xl bg-surface-container border border-outline-variant/20 px-4 py-3 flex items-center gap-3">
@@ -240,10 +525,18 @@ export function Inbox() {
               </div>
               <div className="rounded-xl bg-surface-container border border-outline-variant/20 px-4 py-3 flex items-center gap-3">
                 <AlertCircle className="w-5 h-5 text-error shrink-0" />
-                <div>
+                <div className="flex-1 min-w-0">
                   <p className="text-2xl font-black text-on-surface leading-none">{stats.failed}</p>
                   <p className="text-[10px] font-bold uppercase tracking-widest text-on-surface-variant mt-0.5">Failed</p>
                 </div>
+                {stats.failed > 0 && (
+                  <button
+                    onClick={handleRetryAll}
+                    className="shrink-0 flex items-center gap-1 px-2 py-1.5 bg-error/10 text-error rounded-lg text-xs font-bold hover:bg-error/20 transition-all"
+                  >
+                    <RefreshCw className="w-3 h-3" /> Retry all
+                  </button>
+                )}
               </div>
             </div>
 
@@ -340,6 +633,11 @@ export function Inbox() {
                           {formatDuration(message.processingDurationMs) && (
                             <span className="ml-1 px-2 py-0.5 bg-primary/10 text-primary text-xs rounded-full font-bold">
                               {formatDuration(message.processingDurationMs)}
+                            </span>
+                          )}
+                          {message.processingNode && (
+                            <span className="px-2 py-0.5 bg-surface-container text-on-surface-variant text-xs rounded-full font-bold">
+                              {message.processingNode}
                             </span>
                           )}
                         </div>

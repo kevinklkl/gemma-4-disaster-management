@@ -1,12 +1,10 @@
 import threading
-from dataclasses import dataclass
+from contextlib import contextmanager
+from dataclasses import dataclass, field
 import requests
 
 OLLAMA_URL = "http://localhost:11434/api/generate"
 MODEL_NAME = "gemma4-e2b-unsloth"
-
-# Exported so api.py can acquire it before sweeping the DB for batch partners.
-ollama_lock = threading.Semaphore(1)
 
 
 @dataclass
@@ -47,10 +45,12 @@ def _build_result(body: dict) -> OllamaResult:
     )
 
 
-def _request_single(prompt: str, temperature: float) -> OllamaResult:
-    """HTTP call for one message. Caller must hold ollama_lock."""
+LOCAL_NUM_GPU = 24  # ~60/40 GPU/CPU on host's 6 GB VRAM — tune this per machine
+
+
+def _request_single(prompt: str, temperature: float, url: str = OLLAMA_URL, num_gpu: int = LOCAL_NUM_GPU) -> OllamaResult:
     response = requests.post(
-        OLLAMA_URL,
+        url,
         json={
             "model": MODEL_NAME,
             "prompt": prompt,
@@ -63,6 +63,7 @@ def _request_single(prompt: str, temperature: float) -> OllamaResult:
                 "top_k": 64,
                 "num_ctx": 2048,
                 "num_predict": 512,
+                "num_gpu": num_gpu,
             },
         },
         timeout=60,
@@ -71,16 +72,11 @@ def _request_single(prompt: str, temperature: float) -> OllamaResult:
     return _build_result(response.json())
 
 
-def _request_batch(messages: list[str], temperature: float) -> OllamaResult:
-    """HTTP call for multiple messages. Caller must hold ollama_lock."""
-    # 1. CHANGE THE IMPORT to use the new function
+def _request_batch(messages: list[str], temperature: float, url: str = OLLAMA_URL, num_gpu: int = LOCAL_NUM_GPU) -> OllamaResult:
     from prompts.extraction_prompt import build_batch_prompt
-    
-    # 2. DELETE the old manual formatting and just call the function
     prompt = build_batch_prompt(messages)
-    
     response = requests.post(
-        OLLAMA_URL,
+        url,
         json={
             "model": MODEL_NAME,
             "prompt": prompt,
@@ -91,20 +87,86 @@ def _request_batch(messages: list[str], temperature: float) -> OllamaResult:
                 "temperature": temperature,
                 "top_p": 0.95,
                 "top_k": 64,
-                "num_ctx": 4096,
-                "num_predict": 2048,
+                "num_ctx": 8192,
+                "num_predict": 4096,
+                "num_gpu": num_gpu,
             },
         },
-        timeout=120,
+        timeout=180,
     )
     response.raise_for_status()
     return _build_result(response.json())
 
+
+@dataclass
+class _OllamaNode:
+    url: str
+    name: str
+    num_gpu: int = -1  # -1 = Ollama auto (fills as much GPU as possible)
+    lock: threading.Semaphore = field(default_factory=lambda: threading.Semaphore(1))
+    busy: bool = False
+    jobs_done: int = 0
+
+
+class NodePool:
+    def __init__(self):
+        self._nodes: list[_OllamaNode] = []
+        self._cv = threading.Condition(threading.Lock())
+        self._nodes.append(_OllamaNode(url=OLLAMA_URL, name="local", num_gpu=LOCAL_NUM_GPU))
+
+    def register(self, url: str, name: str, num_gpu: int = -1) -> str:
+        with self._cv:
+            if any(n.url == url for n in self._nodes):
+                return "already_registered"
+            self._nodes.append(_OllamaNode(url=url, name=name, num_gpu=num_gpu))
+            return "registered"
+
+    def _try_acquire(self) -> "_OllamaNode | None":
+        for node in self._nodes:
+            if node.lock.acquire(blocking=False):
+                node.busy = True
+                return node
+        return None
+
+    @contextmanager
+    def acquire(self):
+        """Yield a free node. Any node finishing wakes all waiters so the queue
+        drains across all nodes, not just local."""
+        with self._cv:
+            while True:
+                node = self._try_acquire()
+                if node:
+                    break
+                self._cv.wait()
+
+        try:
+            yield node
+        finally:
+            node.busy = False
+            node.jobs_done += 1
+            node.lock.release()
+            with self._cv:
+                self._cv.notify_all()
+
+    def list_nodes(self) -> list[dict]:
+        with self._cv:
+            return [
+                {"url": n.url, "name": n.name, "busy": n.busy, "jobs_done": n.jobs_done}
+                for n in self._nodes
+            ]
+
+
+node_pool = NodePool()
+# Backward-compat alias — api.py no longer imports this after the update,
+# but keeps things from blowing up if any other code still references it.
+ollama_lock = node_pool._nodes[0].lock
+
+
 def call_ollama(prompt: str, temperature: float = 1.0) -> OllamaResult:
-    with ollama_lock:
-        return _request_single(prompt, temperature)
+    with node_pool.acquire() as node:
+        return _request_single(prompt, temperature, url=node.url, num_gpu=node.num_gpu)
 
 
 def call_ollama_batch(messages: list[str], temperature: float = 1.0) -> OllamaResult:
-    with ollama_lock:
-        return _request_batch(messages, temperature)
+    with node_pool.acquire() as node:
+        return _request_batch(messages, temperature, url=node.url, num_gpu=node.num_gpu)

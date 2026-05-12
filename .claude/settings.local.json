@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -c \"import sqlite3; conn = sqlite3.connect\\('data/inbox.db'\\); conn.execute\\('DELETE FROM messages'\\); conn.execute\\(\\\\\"DELETE FROM sqlite_sequence WHERE name='messages'\\\\\"\\); conn.commit\\(\\); print\\('Deleted:', conn.total_changes - 1, 'messages'\\); conn.close\\(\\)\")",
+      "Bash(taskkill /F /IM ollama.exe)",
+      "PowerShell(taskkill /F /PID 3608)",
+      "PowerShell(taskkill /F /IM ollama.exe /T)",
+      "PowerShell(netstat -ano)",
+      "PowerShell(ollama stop gemma4-e2b-unsloth)",
+      "PowerShell($env:OLLAMA_NUM_GPU=\"0\"; Start-Process -NoNewWindow ollama -ArgumentList \"serve\"; Start-Sleep -Seconds 4; ollama ps)"
+    ]
+  }
+}

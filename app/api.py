@@ -1,9 +1,11 @@
 import asyncio
 import csv
+import ipaddress
 import json
 import os
 import sqlite3
 import time
+import requests
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from typing import Any, List, Optional
@@ -11,7 +13,7 @@ from fastapi import FastAPI, Request, HTTPException, BackgroundTasks, WebSocket,
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-from engine.ollama_client import call_ollama, call_ollama_batch, ollama_lock, _request_single, _request_batch
+from engine.ollama_client import call_ollama, call_ollama_batch, node_pool, _request_single, _request_batch, MODEL_NAME, LOCAL_NUM_GPU
 from engine.extraction.parser import parse_response
 from engine.extraction.validator import validate_and_canonicalize
 from prompts.extraction_prompt import build_extraction_prompt
@@ -79,6 +81,8 @@ def init_db():
             ("packing_state", "TEXT"),
             ("processing_started_at", "TEXT"),
             ("processing_duration_ms", "INTEGER"),
+            ("processing_node", "TEXT"),
+            ("retry_count", "INTEGER DEFAULT 0"),
         ]:
             if col not in existing:
                 conn.execute(f"ALTER TABLE messages ADD COLUMN {col} {definition}")
@@ -131,6 +135,7 @@ def row_to_message(r: sqlite3.Row) -> dict:
         "packingState": json.loads(r["packing_state"]) if r["packing_state"] else {},
         "processingStartedAt": r["processing_started_at"],
         "processingDurationMs": r["processing_duration_ms"],
+        "processingNode": r["processing_node"],
     }
 
 
@@ -155,11 +160,16 @@ def _parse_batch_response(text: str) -> list:
         return []
         
     try:
-        # Load the whole string between { and }
         parsed = json.loads(text[start:end + 1])
     except json.JSONDecodeError as e:
-        print(f"[batch parse] JSON error: {e} — response snippet: {repr(text[start:start+300])}")
-        return []
+        # Output was truncated mid-stream — try closing the array/object to salvage
+        # complete items. text[start:end+1] ends at the last valid '}', so appending
+        # ']}' closes the results array and outer object.
+        try:
+            parsed = json.loads(text[start:end + 1] + "]}")
+        except json.JSONDecodeError:
+            print(f"[batch parse] JSON error: {e} — response snippet: {repr(text[start:start+300])}")
+            return []
         
     # Extract the array from our "results" wrapper
     if isinstance(parsed, dict) and "results" in parsed:
@@ -168,10 +178,8 @@ def _parse_batch_response(text: str) -> list:
     return []
 
 def _run_gemma_bg(msg_id: int, content: str):
-    """Wait for the Ollama lock, then sweep the DB for all queued messages and batch them."""
-    with ollama_lock:
-        # We now hold the lock — any tasks that queued up while we were waiting
-        # will have their messages sitting as needs_processing in the DB.
+    """Acquire a node from the pool, sweep the DB for all queued messages and batch them."""
+    with node_pool.acquire() as node:
         started_at = datetime.now(timezone.utc)
         with get_db() as conn:
             rows = conn.execute(
@@ -195,19 +203,19 @@ def _run_gemma_bg(msg_id: int, content: str):
         try:
             if len(all_ids) == 1:
                 t0 = time.perf_counter()
-                result = _request_single(build_extraction_prompt(all_contents[0]), temperature=0.1)
+                result = _request_single(build_extraction_prompt(all_contents[0]), temperature=0.1, url=node.url, num_gpu=node.num_gpu)
                 t1 = time.perf_counter()
                 data = validate_and_canonicalize(parse_response(result.response))
                 t2 = time.perf_counter()
                 duration_ms = int((datetime.now(timezone.utc) - started_at).total_seconds() * 1000)
                 with get_db() as conn:
                     conn.execute(
-                        "UPDATE messages SET extracted_data = ?, status = 'processed', processing_duration_ms = ? WHERE id = ?",
-                        (json.dumps(data), duration_ms, all_ids[0])
+                        "UPDATE messages SET extracted_data = ?, status = 'processed', processing_duration_ms = ?, processing_node = ? WHERE id = ?",
+                        (json.dumps(data), duration_ms, node.name, all_ids[0])
                     )
                     conn.commit()
                 t3 = time.perf_counter()
-                _broadcast_sync({"type": "processing_done", "msgId": str(all_ids[0]), "durationMs": duration_ms, "extractedData": data})
+                _broadcast_sync({"type": "processing_done", "msgId": str(all_ids[0]), "durationMs": duration_ms, "extractedData": data, "nodeName": node.name})
                 t4 = time.perf_counter()
                 print(
                     f"[msg {all_ids[0]}] total={duration_ms}ms"
@@ -219,7 +227,7 @@ def _run_gemma_bg(msg_id: int, content: str):
                 )
             else:
                 t0 = time.perf_counter()
-                result = _request_batch(all_contents, temperature=0.0)
+                result = _request_batch(all_contents, temperature=0.0, url=node.url, num_gpu=node.num_gpu)
                 t1 = time.perf_counter()
                 items = _parse_batch_response(result.response)
                 items = [validate_and_canonicalize(item) for item in items]
@@ -230,10 +238,10 @@ def _run_gemma_bg(msg_id: int, content: str):
                         if i < len(items):
                             data = items[i]
                             conn.execute(
-                                "UPDATE messages SET extracted_data = ?, status = 'processed', processing_duration_ms = ? WHERE id = ?",
-                                (json.dumps(data), duration_ms, mid)
+                                "UPDATE messages SET extracted_data = ?, status = 'processed', processing_duration_ms = ?, processing_node = ? WHERE id = ?",
+                                (json.dumps(data), duration_ms, node.name, mid)
                             )
-                            _broadcast_sync({"type": "processing_done", "msgId": str(mid), "durationMs": duration_ms, "extractedData": data})
+                            _broadcast_sync({"type": "processing_done", "msgId": str(mid), "durationMs": duration_ms, "extractedData": data, "nodeName": node.name})
                         else:
                             conn.execute("UPDATE messages SET status = 'needs_processing' WHERE id = ?", (mid,))
                     conn.commit()
@@ -247,11 +255,29 @@ def _run_gemma_bg(msg_id: int, content: str):
                     f"  [{result.timing_summary()}]"
                 )
         except Exception as e:
-            with get_db() as conn:
-                for mid in all_ids:
-                    conn.execute("UPDATE messages SET status = 'needs_processing' WHERE id = ?", (mid,))
-                conn.commit()
             print(f"Gemma failed for messages {all_ids}: {e}")
+            to_retry, to_fail = [], []
+            with get_db() as conn:
+                rows = conn.execute(
+                    f"SELECT id, retry_count FROM messages WHERE id IN ({','.join('?'*len(all_ids))})",
+                    all_ids,
+                ).fetchall()
+                counts = {r["id"]: (r["retry_count"] or 0) for r in rows}
+                for mid in all_ids:
+                    if counts.get(mid, 0) < 1:
+                        conn.execute(
+                            "UPDATE messages SET status='needs_processing', retry_count=1 WHERE id=?", (mid,)
+                        )
+                        to_retry.append(mid)
+                    else:
+                        conn.execute("UPDATE messages SET status='failed' WHERE id=?", (mid,))
+                        to_fail.append(mid)
+                conn.commit()
+            for mid in to_fail:
+                _broadcast_sync({"type": "processing_failed", "msgId": str(mid)})
+            if to_retry:
+                import threading
+                threading.Thread(target=_run_gemma_bg, args=(to_retry[0], ""), daemon=True).start()
 
 
 BATCH_SIZE = 10
@@ -275,7 +301,10 @@ def _run_gemma_batch(msg_ids: list, contents: list):
 
     try:
         t0 = time.perf_counter()
-        result = call_ollama_batch(contents)
+        node_name = "local"
+        with node_pool.acquire() as node:
+            result = _request_batch(contents, temperature=0.0, url=node.url, num_gpu=node.num_gpu)
+            node_name = node.name
         t1 = time.perf_counter()
 
         items = [validate_and_canonicalize(item) for item in _parse_batch_response(result.response)]
@@ -288,10 +317,10 @@ def _run_gemma_batch(msg_ids: list, contents: list):
                 if i < len(items):
                     data = items[i]
                     conn.execute(
-                        "UPDATE messages SET extracted_data = ?, status = 'processed', processing_duration_ms = ? WHERE id = ?",
-                        (json.dumps(data), duration_ms, msg_id)
+                        "UPDATE messages SET extracted_data = ?, status = 'processed', processing_duration_ms = ?, processing_node = ? WHERE id = ?",
+                        (json.dumps(data), duration_ms, node_name, msg_id)
                     )
-                    _broadcast_sync({"type": "processing_done", "msgId": str(msg_id), "durationMs": duration_ms, "extractedData": data})
+                    _broadcast_sync({"type": "processing_done", "msgId": str(msg_id), "durationMs": duration_ms, "extractedData": data, "nodeName": node_name})
                 else:
                     # Truncated — requeue for retry
                     conn.execute("UPDATE messages SET status = 'needs_processing' WHERE id = ?", (msg_id,))
@@ -319,11 +348,14 @@ def _run_gemma_batch(msg_ids: list, contents: list):
                 daemon=True,
             ).start()
     except Exception as e:
+        print(f"Batch Gemma failed for messages {msg_ids}: {e}")
         with get_db() as conn:
             for msg_id in msg_ids:
-                conn.execute("UPDATE messages SET status = 'needs_processing' WHERE id = ?", (msg_id,))
+                # Count this batch attempt as the first try so _run_gemma_bg is the final retry
+                conn.execute(
+                    "UPDATE messages SET status='needs_processing', retry_count=1 WHERE id=?", (msg_id,)
+                )
             conn.commit()
-        print(f"Batch Gemma failed for messages {msg_ids}: {e}")
         import threading
         threading.Thread(target=_run_gemma_bg, args=(msg_ids[0], ""), daemon=True).start()
 
@@ -542,6 +574,138 @@ async def update_packing(message_id: int, body: PackingUpdate):
         "packedQty": body.packedQty,
     })
     return {"ok": True}
+
+
+class NodeRegistration(BaseModel):
+    name: str = ""
+
+
+def _detect_num_gpu(ip: str) -> int:
+    """
+    Probe remote Ollama to choose num_gpu.
+
+    Strategy: run the probe with num_ctx=8192 (our batch context size).
+    Ollama allocates the full KV cache at load time, so size_vram after the
+    generate call = model weights + KV cache that actually fit in VRAM.
+    - Tight VRAM (6 GB): KV overflows to RAM → size_vram ≈ size (weights only)
+    - Ample VRAM (16 GB+): KV stays in VRAM → size_vram > size by ~1.5–2 GB
+    The delta between size_vram and size is therefore a direct VRAM-headroom signal.
+    """
+    base = f"http://{ip}:11434"
+    ONE_GB = 1 * 1024 ** 3
+
+    # Load model at full GPU with the same large context we use in batch mode.
+    # This forces KV cache allocation so we can measure how much fit in VRAM.
+    try:
+        requests.post(
+            f"{base}/api/generate",
+            json={
+                "model": MODEL_NAME,
+                "prompt": "hi",
+                "stream": False,
+                "keep_alive": "5m",
+                "options": {"num_predict": 1, "num_gpu": -1, "num_ctx": 8192},
+            },
+            timeout=120,
+        )
+    except Exception:
+        return -1
+
+    try:
+        ps_resp = requests.get(f"{base}/api/ps", timeout=5)
+        ps_resp.raise_for_status()
+        entry = next(
+            (m for m in ps_resp.json().get("models", []) if MODEL_NAME in m.get("name", "")),
+            None,
+        )
+        if entry is None:
+            return -1
+        size = entry.get("size", 0)
+        size_vram = entry.get("size_vram", 0)
+    except Exception:
+        return -1
+
+    if size <= 0:
+        return -1
+
+    # Model weights only partially loaded (less VRAM than model size)
+    if size_vram < size * 0.99:
+        return max(1, round(LOCAL_NUM_GPU * (size_vram / size)))
+
+    # KV cache delta: how much of the KV cache stayed in VRAM alongside the weights.
+    # ≥ 2 GB delta → device has enough headroom to run at full GPU.
+    # < 2 GB delta → KV overflowed to RAM; use the calibrated conservative setting.
+    kv_in_vram = size_vram - size
+    if kv_in_vram >= ONE_GB:
+        return -1
+
+    return LOCAL_NUM_GPU
+
+
+@app.post("/api/nodes")
+async def register_node(request: Request, body: NodeRegistration):
+    # X-Forwarded-For is set by the Vite dev proxy (xfwd: true).
+    # Falls back to request.client.host in production (no proxy).
+    ip = request.headers.get("x-forwarded-for") or request.client.host
+    try:
+        is_loopback = ipaddress.ip_address(ip).is_loopback
+    except ValueError:
+        is_loopback = ip == "localhost"
+    if is_loopback:
+        return {"ok": True, "status": "loopback", "nodes": node_pool.list_nodes()}
+
+    # Verify Ollama is reachable and has the required model installed
+    try:
+        resp = await asyncio.to_thread(
+            lambda: requests.get(f"http://{ip}:11434/api/tags", timeout=5)
+        )
+        resp.raise_for_status()
+        installed = [m["name"] for m in resp.json().get("models", [])]
+        if not any(MODEL_NAME in m for m in installed):
+            return {"ok": False, "status": "no_model", "nodes": node_pool.list_nodes()}
+    except Exception:
+        return {"ok": False, "status": "unreachable", "nodes": node_pool.list_nodes()}
+
+    node_name = body.name or ip
+
+    num_gpu = await asyncio.to_thread(_detect_num_gpu, ip)
+    print(f"[nodes] {ip} ({node_name}) detected num_gpu={num_gpu}")
+
+    url = f"http://{ip}:11434/api/generate"
+    status = node_pool.register(url, node_name, num_gpu=num_gpu)
+    return {"ok": True, "status": status, "nodes": node_pool.list_nodes()}
+
+
+@app.get("/api/nodes")
+def list_nodes():
+    return {"nodes": node_pool.list_nodes()}
+
+
+@app.get("/api/nodes/me")
+async def node_status_me(request: Request):
+    ip = request.headers.get("x-forwarded-for") or request.client.host
+    try:
+        is_loopback = ipaddress.ip_address(ip).is_loopback
+    except ValueError:
+        is_loopback = ip == "localhost"
+    if is_loopback:
+        return {"registered": True, "isHost": True}
+    url = f"http://{ip}:11434/api/generate"
+    registered = any(n["url"] == url for n in node_pool.list_nodes())
+    return {"registered": registered, "isHost": False}
+
+
+@app.post("/api/retry-failed")
+def retry_failed(background_tasks: BackgroundTasks):
+    with get_db() as conn:
+        rows = conn.execute("SELECT id FROM messages WHERE status='failed'").fetchall()
+        ids = [r["id"] for r in rows]
+        if not ids:
+            return {"ok": True, "queued": 0}
+        conn.execute("UPDATE messages SET status='needs_processing', retry_count=0 WHERE status='failed'")
+        conn.commit()
+    background_tasks.add_task(_run_gemma_bg, ids[0], "")
+    return {"ok": True, "queued": len(ids)}
 
 
 @app.websocket("/ws")
