@@ -367,7 +367,7 @@ export function Inbox() {
                           />
                         </div>
                         <div>
-                          <label className="block text-[10px] font-bold tracking-wider uppercase text-on-surface-variant opacity-70 mb-1">Affected Families</label>
+                          <label className="block text-[10px] font-bold tracking-wider uppercase text-on-surface-variant opacity-70 mb-1">Affected Persons</label>
                           <div className="relative">
                             <input
                               type="number"

@@ -3,7 +3,7 @@ from dataclasses import dataclass
 import requests
 
 OLLAMA_URL = "http://localhost:11434/api/generate"
-MODEL_NAME = "gemma4:e4b"
+MODEL_NAME = "gemma4-e2b-unsloth"
 
 # Exported so api.py can acquire it before sweeping the DB for batch partners.
 ollama_lock = threading.Semaphore(1)
@@ -59,13 +59,13 @@ def _request_single(prompt: str, temperature: float) -> OllamaResult:
             "keep_alive": "30m",
             "options": {
                 "temperature": temperature,
-                # build_extraction_prompt is ~1.2-1.5k tokens (catalog + few-shots).
-                "num_ctx": 4096,
-                # Multi-item responses can run long; cap generously.
-                "num_predict": 1024,
+                "top_p": 0.95,
+                "top_k": 64,
+                "num_ctx": 2048,
+                "num_predict": 512,
             },
         },
-        timeout=90,
+        timeout=60,
     )
     response.raise_for_status()
     return _build_result(response.json())
@@ -73,35 +73,38 @@ def _request_single(prompt: str, temperature: float) -> OllamaResult:
 
 def _request_batch(messages: list[str], temperature: float) -> OllamaResult:
     """HTTP call for multiple messages. Caller must hold ollama_lock."""
-    from prompts.extraction_prompt import GEMMA_BATCH_PROMPT_TEMPLATE
-    n = len(messages)
-    numbered = "\n".join(f"{i + 1}: {msg}" for i, msg in enumerate(messages))
-    prompt = GEMMA_BATCH_PROMPT_TEMPLATE.format(n=n, numbered_messages=numbered)
+    # 1. CHANGE THE IMPORT to use the new function
+    from prompts.extraction_prompt import build_batch_prompt
+    
+    # 2. DELETE the old manual formatting and just call the function
+    prompt = build_batch_prompt(messages)
+    
     response = requests.post(
         OLLAMA_URL,
         json={
             "model": MODEL_NAME,
             "prompt": prompt,
             "stream": False,
-            "format": "json",  # <--- ADD THIS
+            "format": "json",
             "keep_alive": "30m",
             "options": {
                 "temperature": temperature,
+                "top_p": 0.95,
+                "top_k": 64,
                 "num_ctx": 4096,
-                "num_predict": 1024,
+                "num_predict": 2048,
             },
         },
-        timeout=240,
+        timeout=120,
     )
     response.raise_for_status()
     return _build_result(response.json())
 
-
-def call_ollama(prompt: str, temperature: float = 0.1) -> OllamaResult:
+def call_ollama(prompt: str, temperature: float = 1.0) -> OllamaResult:
     with ollama_lock:
         return _request_single(prompt, temperature)
 
 
-def call_ollama_batch(messages: list[str], temperature: float = 0.0) -> OllamaResult:
+def call_ollama_batch(messages: list[str], temperature: float = 1.0) -> OllamaResult:
     with ollama_lock:
         return _request_batch(messages, temperature)

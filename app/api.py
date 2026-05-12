@@ -293,12 +293,13 @@ def _run_gemma_batch(msg_ids: list, contents: list):
                     )
                     _broadcast_sync({"type": "processing_done", "msgId": str(msg_id), "durationMs": duration_ms, "extractedData": data})
                 else:
-                    # Truncated — fall back to individual processing
+                    # Truncated — requeue for retry
                     conn.execute("UPDATE messages SET status = 'needs_processing' WHERE id = ?", (msg_id,))
             conn.commit()
         t3 = time.perf_counter()
 
         filled = min(len(items), n)
+        missed = n - filled
         print(
             f"[batch {filled}/{n} msgs] total={duration_ms}ms"
             f"  ollama={1000*(t1-t0):.0f}ms"
@@ -306,12 +307,25 @@ def _run_gemma_batch(msg_ids: list, contents: list):
             f"  db={1000*(t3-t2):.0f}ms"
             f"  [{result.timing_summary()}]"
         )
+        # Gemma returned a truncated response — re-trigger the sweep so the
+        # requeued messages don't sit as needs_processing indefinitely.
+        if missed > 0:
+            print(f"[batch] {missed} msgs truncated — re-triggering sweep")
+            leftover_ids = msg_ids[filled:]
+            import threading
+            threading.Thread(
+                target=_run_gemma_bg,
+                args=(leftover_ids[0], ""),
+                daemon=True,
+            ).start()
     except Exception as e:
         with get_db() as conn:
             for msg_id in msg_ids:
                 conn.execute("UPDATE messages SET status = 'needs_processing' WHERE id = ?", (msg_id,))
             conn.commit()
         print(f"Batch Gemma failed for messages {msg_ids}: {e}")
+        import threading
+        threading.Thread(target=_run_gemma_bg, args=(msg_ids[0], ""), daemon=True).start()
 
 
 class ProcessRequest(BaseModel):

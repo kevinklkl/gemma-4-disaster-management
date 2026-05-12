@@ -1,13 +1,9 @@
 """Extraction prompt for Gemma.
 
 Optimized for edge inference and maximum KV cache retention.
-The prompt is assembled from three pieces:
-  1. Static instructions (urgency rubric, rules, minified output schema).
-  2. The canonical-item vocabulary, rendered dynamically from `CATALOG`.
-  3. Few-shot examples demonstrating Taglish input and minified JSON output.
-
-Call `build_extraction_prompt(content)` for single-message extraction.
-For high-throughput sweeps, use `GEMMA_BATCH_PROMPT_TEMPLATE`.
+Uses Prefix Sharing: The exact same Shared Prefix is sent to Ollama 
+for both single-message and batch extractions, ensuring the model never 
+has to re-read the CATALOG or RULES when the queue size fluctuates.
 """
 
 from __future__ import annotations
@@ -20,7 +16,7 @@ def _is_tagalog_word(word: str) -> bool:
     # Common Tagalog and Bisaya grammatical markers
     local_markers = {
         "ng", "mga", "ang", "sa", "kay", "nang", "po", "ho", "na", "pa", 
-        "din", "rin", "daw", "raw", "naman", "ni", "ug", "ang" # 'ug' is Bisaya 'and'
+        "din", "rin", "daw", "raw", "naman", "ni", "ug", "ang"
     }
     
     word_lower = word.lower().strip(".,!?;:()[]\"'")
@@ -29,15 +25,15 @@ def _is_tagalog_word(word: str) -> bool:
     local_roots = {
         # Food & Water
         "tubig", "bigas", "delata", "kain", "inom", "ulam", "gatas", "kape", 
-        "noodles", "sardinas", "tinapay", "gutom", "uhaw", "pagkaon", # pagkaon = food (Bisaya)
+        "noodles", "sardinas", "tinapay", "gutom", "uhaw", "pagkaon",
         
         # Medical & Hygiene
         "sakit", "gamot", "sugat", "lagnat", "ubo", "sipon", "hugas", 
-        "pampers", "diaper", "napkin", "sabon", "tambal", # tambal = medicine (Bisaya)
+        "pampers", "diaper", "napkin", "sabon", "tambal",
         
         # Shelter & Supplies
         "bahay", "banig", "kumot", "trapal", "tent", "bubong", "damit", 
-        "tsinelas", "balay", # balay = house (Bisaya)
+        "tsinelas", "balay",
         
         # People & Vulnerable Groups
         "bata", "matanda", "lola", "lolo", "pamilya", "tao", "katao", 
@@ -45,7 +41,7 @@ def _is_tagalog_word(word: str) -> bool:
         
         # Action, Status, & Emergency
         "tulong", "bigay", "padala", "kailangan", "ubos", "sira", "baha", 
-        "lunod", "tabang", "wala", "dami", "konti" # tabang = help (Bisaya)
+        "lunod", "tabang", "wala", "dami", "konti"
     }
     
     # Check if it's an exact match for a marker or root
@@ -56,8 +52,7 @@ def _is_tagalog_word(word: str) -> bool:
     affixes = ["-in", "-an", "mag-", "nag-", "pa-", "pinag-", "naka-", "pang-", "ma-"]
     has_affix = any(affix in word_lower for affix in affixes)
     
-    # Prevent false positives where English words happen to contain "-in" (like "medicine" or "origin")
-    # We only trigger the affix rule if the string actually starts/ends with the hyphenated affix
+    # Prevent false positives where English words happen to contain "-in"
     if has_affix:
         for affix in affixes:
             if affix.endswith("-") and word_lower.startswith(affix.strip("-")):
@@ -66,6 +61,7 @@ def _is_tagalog_word(word: str) -> bool:
                 return True
 
     return False
+
 
 def _get_disambiguation_hint(key: str, catalog: dict) -> str | None:
     """Return short hint if key has semantically similar siblings."""
@@ -113,7 +109,7 @@ def _render_catalog_lines() -> str:
 
 _INSTRUCTIONS_HEADER = """\
 Extract relief needs from disaster messages (Tagalog, English, Taglish).
-Return compact valid JSON only. No markdown. No explanation.
+No markdown. No explanation.
 
 SCHEMA:
 {"loc":<str|null>,"urg":"L|M|H|C","pax":<int|null>,"items":[{"txt":<str>,"can":<key|null>,"qty":<int|null>,"u":<str|null>}]}
@@ -130,55 +126,61 @@ URGENCY (urg):
  L — low: pre-positioning, donation, inquiry
 
 RULES:
-- pax: Total people (1 pamilya ≈ 5 persons).
-- txt: EXACT phrase from message.
+- pax: Extract TOTAL people (1 pamilya ≈ 5 persons). Combine demographics.
+- txt: EXACT short name of the physical relief good ONLY.
+- REQUESTS ONLY: Extract ONLY items being explicitly requested or needed. NEVER extract items the sender already has, or items they mentioned eating/using in the past (e.g., "kanin lang nakain").
+- CONTEXT MATTERS: Pay attention to who the item is for. "gatas" for a baby MUST be matched to infant formula, not standard milk. 
+- DEMOGRAPHICS ARE NOT ITEMS: NEVER extract "bata", "senior", "tao", "pamilya", etc., into the "items" array. They ONLY count towards "pax".
 - can: MUST match a key exactly, or null. Split compound requests.
 - qty: INT only. Extract only if explicit.
 - u: EXACT unit (cans, sacks, L, packs). null if unspecified.
 - Empty items [] is valid if no specific physical goods are requested.
 """
-
-
 _FEW_SHOT_EXAMPLES = """\
 EXAMPLES:
+Message: "Brgy 7 San Jose, kailangan namin ng tubig at bigas para sa 50 katao."
+Extraction: {"loc":"Brgy 7 San Jose","urg":"H","pax":50,"items":[{"txt":"tubig","can":"water","qty":null,"u":null},{"txt":"bigas","can":"rice","qty":null,"u":null}]}
 
-Message: "Brgy 7 San Jose, kailangan namin ng tubig at bigas para sa 50 katao. Walang kuryente, may mga matanda."
-JSON: {"loc":"Brgy 7 San Jose","urg":"H","pax":50,"items":[{"txt":"tubig","can":"water_drinking","qty":null,"u":null},{"txt":"bigas","can":"rice","qty":null,"u":null}]}
+Message: "TULONG! Naipit kami sa Brgy Bagumbayan, walang makain 2 days na"
+Extraction: {"loc":"Brgy Bagumbayan","urg":"C","pax":null,"items":[]}
 
-Message: "send 100 cans of sardines and 5 sacks of rice to evacuation center in Tacloban asap please"
-JSON: {"loc":"Tacloban","urg":"H","pax":null,"items":[{"txt":"sardines","can":"canned_goods","qty":100,"u":"cans"},{"txt":"rice","can":"rice","qty":5,"u":"sacks"}]}
+Message: "sir/mam ung anti-rejection meds ng tito ko ubos bkas."
+Extraction: {"loc":null,"urg":"H","pax":1,"items":[{"txt":"anti-rejection meds","can":null,"qty":null,"u":null}]}
 
-Message: "TULONG! Naipit kami sa Brgy Bagumbayan, may mga bata at lola, walang makain 2 days na"
-JSON: {"loc":"Brgy Bagumbayan","urg":"C","pax":null,"items":[]}
-
-Message: "need diapers and milk for 3 babies and adult pampers for lola"
-JSON: {"loc":null,"urg":"H","pax":4,"items":[{"txt":"diapers","can":"diapers_baby","qty":null,"u":null},{"txt":"milk for babies","can":"infant_formula","qty":null,"u":null},{"txt":"adult pampers","can":"diapers_adult","qty":null,"u":null}]}
-
-Message: "naka-evacuate na kami sa school. 3 pamilya kami dito, kailangan ng banig at kumot pang gabi"
-JSON: {"loc":"school","urg":"M","pax":15,"items":[{"txt":"banig","can":"sleeping_mat","qty":null,"u":null},{"txt":"kumot","can":"blanket","qty":null,"u":null}]}
-
-Message: "200 people stranded, need 50 packs of noodles, 30L water, and blankets"
-JSON: {"loc":null,"urg":"C","pax":200,"items":[{"txt":"noodles","can":"canned_goods","qty":50,"u":"packs"},{"txt":"water","can":"water_drinking","qty":30,"u":"L"},{"txt":"blankets","can":"blanket","qty":null,"u":null}]}
+Message: "we only have rice left. need drinking water fast for 3 families."
+Extraction: {"loc":null,"urg":"H","pax":15,"items":[{"txt":"drinking water","can":"water","qty":null,"u":null}]}
 """
 
 
-def build_extraction_prompt(content: str) -> str:
-    """Assembles the prompt. Dynamic content MUST stay at the very bottom for KV caching."""
+def _get_shared_prefix() -> str:
+    """This exact string is cached by Ollama across both Single and Batch calls."""
     return (
         f"{_INSTRUCTIONS_HEADER}"
         f"{_render_catalog_lines()}\n\n"
         f"{_INSTRUCTIONS_FOOTER}\n"
         f"{_FEW_SHOT_EXAMPLES}\n"
-        f'Message: "{content}"\n'
-        f"JSON:"
     )
 
 
-# Lean batch template
-GEMMA_BATCH_PROMPT_TEMPLATE = """Return a JSON object containing a "results" array of exactly {n} objects. No markdown. No explanation.
-Extract relief needs. "tawo" = pax. Unknown = null.
-Schema: {{"results": [{{"loc":null,"urg":"L|M|H|C","pax":null,"items":[{{"txt":"string","qty":null}}]}}]}}
+def build_extraction_prompt(content: str) -> str:
+    """Suffix for a single message."""
+    prefix = _get_shared_prefix()
+    suffix = (
+        f"TASK: Extract the following single message. Return ONLY the JSON object.\n\n"
+        f'Message: "{content}"\n'
+        f"JSON:"
+    )
+    return prefix + suffix
 
-{numbered_messages}
 
-JSON object:""".strip()
+def build_batch_prompt(messages: list[str]) -> str:
+    """Suffix for multiple messages."""
+    n = len(messages)
+    numbered = "\n".join(f"{i + 1}: {msg}" for i, msg in enumerate(messages))
+    prefix = _get_shared_prefix()
+    suffix = (
+        f"TASK: Extract the following {n} messages. Return a JSON object with a 'results' array containing {n} objects.\n\n"
+        f"{numbered}\n\n"
+        f"JSON Object:"
+    )
+    return prefix + suffix
