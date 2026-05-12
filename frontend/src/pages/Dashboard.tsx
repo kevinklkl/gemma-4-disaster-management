@@ -1,56 +1,11 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useMemo } from "react";
 import { TopNav } from "../components/TopNav";
 import { MobileNav } from "../components/MobileNav";
-import {
-  Users, CheckCircle2, Clock, MapPin, Send, Box, ClipboardList
-} from "lucide-react";
+import { LocationCard as LocationCardComponent } from "../components/LocationCard";
+import { CheckCircle2, Box, ClipboardList } from "lucide-react";
+import type { ApiMessage, ApiLocation, LocationCard, AggregatedItem, ItemSource } from "../types";
 
-type Item = {
-  id: string;
-  name: string;
-  qty: number | null;
-  packedQty: number;
-  canonical?: string | null;
-  unit?: string | null;
-};
-
-type Order = {
-  id: string;
-  msgId?: string;
-  location: string;
-  lastUpdated: string;
-  urgency: string;
-  persons: number;
-  status: "packing" | "ready";
-  items: Item[];
-};
-
-type ApiLocation =
-  | string
-  | { barangay?: string | null; city?: string | null; province?: string | null }
-  | null;
-
-type ApiMessage = {
-  id: string;
-  type: string;
-  source: string;
-  time: string;
-  content: string;
-  status: string;
-  packingState: Record<string, number>;
-  extractedData: {
-    location: ApiLocation;
-    urgency: string;
-    persons: number;
-    items: {
-      name: string;
-      qty: number | null;
-      canonical?: string | null;
-      raw_text?: string | null;
-      unit?: string | null;
-    }[];
-  } | null;
-};
+const URGENCY_WEIGHT: Record<string, number> = { critical: 4, high: 3, medium: 2, low: 1 };
 
 function formatLocation(loc: ApiLocation): string {
   if (!loc) return "Unknown";
@@ -59,66 +14,167 @@ function formatLocation(loc: ApiLocation): string {
   return parts.length ? parts.join(", ") : "Unknown";
 }
 
-function formatTime(iso: string): string {
-  try {
-    return new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-  } catch {
-    return iso;
+function aggregateByLocation(messages: ApiMessage[]): LocationCard[] {
+  const processed = messages.filter(m => m.status === "processed" && m.extractedData);
+  const groups = new Map<string, ApiMessage[]>();
+
+  for (const msg of processed) {
+    const loc = formatLocation(msg.extractedData?.location ?? null);
+    if (loc === "Unknown") {
+      groups.set(`__unknown_${msg.id}`, [msg]);
+    } else {
+      const existing = groups.get(loc);
+      if (existing) existing.push(msg);
+      else groups.set(loc, [msg]);
+    }
   }
+
+  const cards: LocationCard[] = [];
+
+  for (const [key, msgs] of groups) {
+    const isUnknown = key.startsWith("__unknown_");
+    const location = isUnknown ? "Unknown" : key;
+
+    let highestUrgency = "low";
+    let totalPersons = 0;
+    let oldestTime = "";
+    const messageIds: string[] = [];
+    const contents: string[] = [];
+    const channelCounts = new Map<string, number>();
+    const itemMap = new Map<string, AggregatedItem>();
+
+    for (const msg of msgs) {
+      const ed = msg.extractedData!;
+      messageIds.push(msg.id);
+      if (msg.content) contents.push(msg.content);
+
+      if ((URGENCY_WEIGHT[ed.urgency] ?? 0) > (URGENCY_WEIGHT[highestUrgency] ?? 0)) {
+        highestUrgency = ed.urgency;
+      }
+      totalPersons += ed.persons ?? 0;
+
+      if (!oldestTime || msg.time < oldestTime) {
+        oldestTime = msg.time;
+      }
+
+      const ch = msg.type || "sms";
+      channelCounts.set(ch, (channelCounts.get(ch) ?? 0) + 1);
+
+      for (let i = 0; i < ed.items.length; i++) {
+        const item = ed.items[i];
+        const canonical = item.canonical || item.name.toLowerCase();
+        const unit = item.unit || "";
+        const mapKey = `${canonical}|${unit}`;
+        const packedQty = msg.packingState?.[String(i)] ?? 0;
+
+        const source: ItemSource = {
+          msgId: msg.id,
+          itemIndex: i,
+          qty: item.qty,
+          packedQty,
+        };
+
+        if (itemMap.has(mapKey)) {
+          const agg = itemMap.get(mapKey)!;
+          if (item.qty != null) {
+            agg.totalQty = (agg.totalQty ?? 0) + item.qty;
+          }
+          agg.totalPacked += packedQty;
+          agg.sources.push(source);
+        } else {
+          itemMap.set(mapKey, {
+            key: mapKey,
+            name: item.name,
+            canonical: item.canonical ?? null,
+            unit: item.unit ?? null,
+            totalQty: item.qty,
+            totalPacked: packedQty,
+            sources: [source],
+          });
+        }
+      }
+    }
+
+    let topChannel = "sms";
+    let topCount = 0;
+    for (const [ch, count] of channelCounts) {
+      if (count > topCount) { topChannel = ch; topCount = count; }
+    }
+    if (channelCounts.size > 1) topChannel = "mixed";
+
+    cards.push({
+      locationKey: key,
+      location,
+      urgency: highestUrgency,
+      totalPersons,
+      receivedAt: oldestTime,
+      items: Array.from(itemMap.values()),
+      messageIds,
+      contents,
+      channel: topChannel,
+      isUnknownLocation: isUnknown,
+      isSplitRemainder: false,
+    });
+  }
+
+  return cards;
 }
 
-function messageToOrder(msg: ApiMessage): Order {
-  return {
-    id: `ORD-${msg.id}`,
-    msgId: msg.id,
-    location: formatLocation(msg.extractedData?.location ?? null),
-    lastUpdated: `Today, ${formatTime(msg.time)}`,
-    urgency: msg.extractedData?.urgency || "medium",
-    persons: msg.extractedData?.persons || 0,
-    status: "packing",
-    items: (msg.extractedData?.items || []).map((item, i) => ({
-      id: `${msg.id}-${i}`,
-      name: item.name,
-      qty: item.qty,
-      packedQty: msg.packingState?.[String(i)] ?? 0,
-      canonical: item.canonical ?? null,
-      unit: item.unit ?? null,
-    })),
-  };
+function sortCards(cards: LocationCard[]): LocationCard[] {
+  return [...cards].sort((a, b) => {
+    const urgDiff = (URGENCY_WEIGHT[b.urgency] ?? 0) - (URGENCY_WEIGHT[a.urgency] ?? 0);
+    if (urgDiff !== 0) return urgDiff;
+    const aTime = a.receivedAt ? new Date(a.receivedAt).getTime() : Infinity;
+    const bTime = b.receivedAt ? new Date(b.receivedAt).getTime() : Infinity;
+    if (aTime !== bTime) return aTime - bTime;
+    return b.items.length - a.items.length;
+  });
+}
+
+function distributePacked(sources: ItemSource[], newTotal: number): ItemSource[] {
+  const sorted = [...sources].sort((a, b) => {
+    const aMsgId = parseInt(a.msgId) || 0;
+    const bMsgId = parseInt(b.msgId) || 0;
+    return aMsgId - bMsgId;
+  });
+
+  let remaining = Math.max(0, newTotal);
+  return sorted.map(src => {
+    const cap = src.qty ?? Infinity;
+    const give = Math.min(remaining, cap);
+    remaining -= give;
+    return { ...src, packedQty: give };
+  });
 }
 
 export function Dashboard() {
-  const [orders, setOrdersState] = useState<Order[]>([]);
+  const [apiMessages, setApiMessages] = useState<ApiMessage[]>([]);
+  const [splitRemainders, setSplitRemainders] = useState<LocationCard[]>([]);
   const [wsConnected, setWsConnected] = useState(false);
-  const ordersRef = useRef<Order[]>([]);
+  const [now, setNow] = useState(Date.now());
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectRef = useRef(true);
   const packingTimers = useRef(new Map<string, ReturnType<typeof setTimeout>>());
+  const apiMessagesRef = useRef<ApiMessage[]>([]);
 
-  // Mirrors state into a ref so event handlers always read the latest value
-  const setOrders = (updater: Order[] | ((prev: Order[]) => Order[])) => {
-    setOrdersState(prev => {
+  const setMessages = (updater: ApiMessage[] | ((prev: ApiMessage[]) => ApiMessage[])) => {
+    setApiMessages(prev => {
       const next = typeof updater === "function" ? updater(prev) : updater;
-      ordersRef.current = next;
+      apiMessagesRef.current = next;
       return next;
     });
   };
 
-  const fetchOrders = () => {
+  const fetchMessages = () => {
     fetch("/api/messages")
-      .then((r) => r.json())
-      .then((msgs: ApiMessage[]) => {
-        const processed = msgs
-          .filter((m) => m.status === "processed" && m.extractedData)
-          .map(messageToOrder);
-        setOrders(processed);
-      })
+      .then(r => r.json())
+      .then((msgs: ApiMessage[]) => setMessages(msgs))
       .catch(console.error);
   };
 
   useEffect(() => {
     reconnectRef.current = true;
-    fetchOrders();
+    fetchMessages();
 
     const connect = () => {
       const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
@@ -131,18 +187,14 @@ export function Dashboard() {
         try {
           const msg = JSON.parse(event.data as string);
           if (msg.type === "packing_update") {
-            const orderId = `ORD-${msg.msgId}`;
-            const itemId = `${msg.msgId}-${msg.itemIndex}`;
-            setOrders(prev =>
-              prev.map(order =>
-                order.id !== orderId ? order : {
-                  ...order,
-                  items: order.items.map(item =>
-                    item.id === itemId ? { ...item, packedQty: msg.packedQty } : item
-                  ),
-                }
-              )
-            );
+            setMessages(prev => prev.map(m =>
+              m.id !== String(msg.msgId) ? m : {
+                ...m,
+                packingState: { ...m.packingState, [String(msg.itemIndex)]: msg.packedQty },
+              }
+            ));
+          } else if (msg.type === "processing_done") {
+            fetchMessages();
           }
         } catch {}
       };
@@ -151,162 +203,174 @@ export function Dashboard() {
         setWsConnected(false);
         if (reconnectRef.current) setTimeout(connect, 3000);
       };
-
       ws.onerror = () => ws.close();
     };
 
     connect();
 
-    const onFocus = () => fetchOrders();
+    const onFocus = () => fetchMessages();
     window.addEventListener("focus", onFocus);
+
+    const timer = setInterval(() => setNow(Date.now()), 30_000);
 
     return () => {
       reconnectRef.current = false;
       wsRef.current?.close();
       window.removeEventListener("focus", onFocus);
+      clearInterval(timer);
     };
   }, []);
 
-  const toggleItemPacked = (orderId: string, itemId: string) => {
-    const order = ordersRef.current.find(o => o.id === orderId);
-    const item = order?.items.find(i => i.id === itemId);
-    if (!order || !item) return;
+  const locationCards = useMemo(() => {
+    const fromApi = aggregateByLocation(apiMessages);
+    const all = [...fromApi, ...splitRemainders];
+    return sortCards(all);
+  }, [apiMessages, splitRemainders]);
 
-    const newPackedQty = item.packedQty === item.qty ? 0 : item.qty;
+  const handleToggleItemPacked = (locationKey: string, itemKey: string) => {
+    const card = locationCards.find(c => c.locationKey === locationKey);
+    const item = card?.items.find(i => i.key === itemKey);
+    if (!card || !item) return;
 
-    setOrders(prev =>
-      prev.map(o =>
-        o.id !== orderId ? o : {
-          ...o,
-          items: o.items.map(i =>
-            i.id !== itemId ? i : { ...i, packedQty: newPackedQty }
-          ),
-        }
-      )
-    );
-
-    if (order.msgId) {
-      const msgId = order.msgId;
-      const itemIndex = parseInt(itemId.slice(msgId.length + 1));
-      fetch(`/api/messages/${msgId}/packing`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ itemIndex, packedQty: newPackedQty }),
-      }).catch(console.error);
-    }
+    const newTotal = (item.totalQty != null && item.totalPacked >= item.totalQty) ? 0 : (item.totalQty ?? 0);
+    applyPackingUpdate(card, item, newTotal);
   };
 
-  const updateItemPackedQty = (orderId: string, itemId: string, qty: number) => {
-    const order = ordersRef.current.find(o => o.id === orderId);
-    const item = order?.items.find(i => i.id === itemId);
-    if (!order || !item) return;
+  const handleUpdateItemPackedQty = (locationKey: string, itemKey: string, qty: number) => {
+    const card = locationCards.find(c => c.locationKey === locationKey);
+    const item = card?.items.find(i => i.key === itemKey);
+    if (!card || !item) return;
 
-    const clamped = Math.max(0, Math.min(item.qty, qty));
-
-    setOrders(prev =>
-      prev.map(o =>
-        o.id !== orderId ? o : {
-          ...o,
-          items: o.items.map(i =>
-            i.id !== itemId ? i : { ...i, packedQty: clamped }
-          ),
-        }
-      )
-    );
-
-    if (order.msgId) {
-      const msgId = order.msgId;
-      const itemIndex = parseInt(itemId.slice(msgId.length + 1));
-      const existing = packingTimers.current.get(itemId);
-      if (existing) clearTimeout(existing);
-      packingTimers.current.set(itemId, setTimeout(() => {
-        fetch(`/api/messages/${msgId}/packing`, {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ itemIndex, packedQty: clamped }),
-        }).catch(console.error);
-        packingTimers.current.delete(itemId);
-      }, 400));
-    }
+    const clamped = Math.max(0, item.totalQty != null ? Math.min(item.totalQty, qty) : qty);
+    applyPackingUpdate(card, item, clamped);
   };
 
-  const markOrderReady = async (orderId: string) => {
-    const order = orders.find((o) => o.id === orderId);
+  const applyPackingUpdate = (card: LocationCard, item: AggregatedItem, newTotal: number) => {
+    if (card.isSplitRemainder) {
+      setSplitRemainders(prev => prev.map(c =>
+        c.locationKey !== card.locationKey ? c : {
+          ...c,
+          items: c.items.map(i => i.key !== item.key ? i : { ...i, totalPacked: newTotal }),
+        }
+      ));
+      return;
+    }
 
-    setOrders((prev) => {
-      const idx = prev.findIndex((o) => o.id === orderId);
-      if (idx === -1) return prev;
-      const ord = prev[idx];
-      const packed = ord.items.filter((i) => i.packedQty > 0).map((i) => ({ ...i, qty: i.packedQty }));
-      const unpacked = ord.items.filter((i) => i.packedQty < i.qty).map((i) => ({ ...i, qty: i.qty - i.packedQty, packedQty: 0 }));
-      const next = [...prev];
-      if (unpacked.length === 0) {
-        next[idx] = { ...ord, items: packed, status: "ready" };
-      } else if (packed.length > 0) {
-        next[idx] = { ...ord, items: packed, status: "ready" };
-        next.splice(idx + 1, 0, {
-          ...ord,
-          id: `${ord.id}-${Math.floor(1000 + Math.random() * 9000)}-SPLIT`,
-          msgId: undefined,
-          status: "packing",
-          items: unpacked,
-          lastUpdated: "Just now",
-        });
+    const distributed = distributePacked(item.sources, newTotal);
+
+    setMessages(prev => {
+      let updated = prev;
+      for (const src of distributed) {
+        const orig = item.sources.find(s => s.msgId === src.msgId && s.itemIndex === src.itemIndex);
+        if (orig && orig.packedQty !== src.packedQty) {
+          updated = updated.map(m =>
+            m.id !== src.msgId ? m : {
+              ...m,
+              packingState: { ...m.packingState, [String(src.itemIndex)]: src.packedQty },
+            }
+          );
+        }
       }
-      return next;
+      return updated;
     });
 
-    if (order?.msgId) {
-      await fetch(`/api/messages/${order.msgId}/status`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ status: "fulfilled" }),
-      }).catch(console.error);
+    for (const src of distributed) {
+      const orig = item.sources.find(s => s.msgId === src.msgId && s.itemIndex === src.itemIndex);
+      if (orig && orig.packedQty !== src.packedQty) {
+        const timerKey = `${src.msgId}-${src.itemIndex}`;
+        const existing = packingTimers.current.get(timerKey);
+        if (existing) clearTimeout(existing);
+        packingTimers.current.set(timerKey, setTimeout(() => {
+          fetch(`/api/messages/${src.msgId}/packing`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ itemIndex: src.itemIndex, packedQty: src.packedQty }),
+          }).catch(console.error);
+          packingTimers.current.delete(timerKey);
+        }, 400));
+      }
     }
   };
 
-  // Aggregate by canonical key so "tubig" and "water" merge into one row.
-  // Different units stay separate (you can't sum 5kg + 5 sacks). Items with
-  // null qty contribute 0 to the total but still appear so dispatchers can
-  // see that quantity needs to be clarified.
-  const aggregatedItems = Object.values(
-    orders
-      .filter((o) => o.status === "packing")
-      .flatMap((o) => o.items)
-      .reduce(
-        (acc, item) => {
-          const groupKey = item.canonical || item.name.toLowerCase();
-          const unit = item.unit || "";
-          const key = `${groupKey}|${unit}`;
-          if (!acc[key]) {
-            acc[key] = { name: item.name, unit, remaining: 0, hasUnknownQty: false };
-          }
-          if (item.qty == null) {
-            acc[key].hasUnknownQty = true;
-          } else {
-            acc[key].remaining += item.qty - item.packedQty;
-          }
-          return acc;
-        },
-        {} as Record<string, { name: string; unit: string; remaining: number; hasUnknownQty: boolean }>
-      )
-  ).sort((a, b) => b.remaining - a.remaining);
+  const handleDispatch = async (locationKey: string) => {
+    const card = locationCards.find(c => c.locationKey === locationKey);
+    if (!card) return;
 
-  const getUrgencyColor = (urgency: string) => {
-    switch (urgency) {
-      case "critical": return "bg-[#DC2626] text-white";
-      case "high": return "bg-[#EA580C] text-white";
-      default: return "bg-[#D97706] text-white";
+    const unpackedItems = card.items
+      .filter(i => i.totalQty == null || i.totalPacked < i.totalQty)
+      .map(i => ({
+        ...i,
+        totalQty: i.totalQty != null ? i.totalQty - i.totalPacked : i.totalQty,
+        totalPacked: 0,
+        sources: [],
+      }));
+
+    if (card.isSplitRemainder) {
+      if (unpackedItems.length > 0) {
+        setSplitRemainders(prev => prev.map(c =>
+          c.locationKey !== card.locationKey ? c : { ...c, items: unpackedItems }
+        ));
+      } else {
+        setSplitRemainders(prev => prev.filter(c => c.locationKey !== card.locationKey));
+      }
+      return;
+    }
+
+    for (const msgId of card.messageIds) {
+      try {
+        await fetch(`/api/messages/${msgId}/status`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ status: "fulfilled" }),
+        });
+      } catch (e) {
+        console.error(`Failed to mark message ${msgId} as fulfilled:`, e);
+      }
+    }
+
+    setMessages(prev => prev.filter(m => !card.messageIds.includes(m.id)));
+
+    if (unpackedItems.length > 0) {
+      const remainder: LocationCard = {
+        locationKey: `${card.locationKey}__remainder_${Date.now()}`,
+        location: card.location,
+        urgency: card.urgency,
+        totalPersons: card.totalPersons,
+        receivedAt: new Date().toISOString(),
+        items: unpackedItems,
+        messageIds: [],
+        contents: [],
+        channel: card.channel,
+        isUnknownLocation: card.isUnknownLocation,
+        isSplitRemainder: true,
+      };
+      setSplitRemainders(prev => [...prev, remainder]);
     }
   };
 
-  const getUrgencyBorder = (urgency: string) => {
-    switch (urgency) {
-      case "critical": return "border-t-[#DC2626]";
-      case "high": return "border-t-[#EA580C]";
-      default: return "border-t-[#D97706]";
+  const aggregatedNeeds = useMemo(() => {
+    const acc: Record<string, { name: string; unit: string; remaining: number; hasUnknownQty: boolean }> = {};
+
+    for (const card of locationCards) {
+      for (const item of card.items) {
+        const groupKey = item.canonical || item.name.toLowerCase();
+        const unit = item.unit || "";
+        const key = `${groupKey}|${unit}`;
+        if (!acc[key]) {
+          acc[key] = { name: item.name, unit, remaining: 0, hasUnknownQty: false };
+        }
+        if (item.totalQty == null) {
+          acc[key].hasUnknownQty = true;
+        } else {
+          acc[key].remaining += item.totalQty - item.totalPacked;
+        }
+      }
     }
-  };
+
+    return Object.values(acc)
+      .filter(i => i.remaining > 0 || i.hasUnknownQty)
+      .sort((a, b) => b.remaining - a.remaining);
+  }, [locationCards]);
 
   return (
     <div className="h-screen bg-surface-container-low font-body text-on-surface flex flex-col overflow-hidden">
@@ -332,130 +396,19 @@ export function Dashboard() {
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 2xl:grid-cols-3 gap-6 pb-20">
-            {orders.filter((o) => o.status === "packing").map((order) => {
-              const allPacked = order.items.every((i) => i.packedQty === i.qty);
-              const somePacked = order.items.some((i) => i.packedQty > 0);
-              return (
-                <div
-                  key={order.id}
-                  className={`bg-surface-bright rounded-xl custom-shadow border-t-[6px] flex flex-col overflow-hidden transition-all ${getUrgencyBorder(order.urgency)}`}
-                >
-                  <div className="p-5 border-b border-outline-variant/10 bg-gradient-to-b from-surface-container-lowest to-surface flex flex-col gap-3">
-                    <div className="flex justify-between items-start">
-                      <div>
-                        <h3 className="font-headline font-black text-2xl text-on-surface tracking-tight mb-1">{order.id}</h3>
-                        <p className="font-bold flex items-center gap-1.5 text-on-surface text-lg">
-                          <MapPin className="w-4 h-4 text-primary" /> {order.location}
-                        </p>
-                      </div>
-                      <div className="px-2.5 py-1.5 rounded-lg text-xs font-bold flex flex-col items-end justify-center bg-surface-container text-on-surface-variant">
-                        <span className="uppercase tracking-wider text-[10px] opacity-70 mb-0.5">Last Updated</span>
-                        <span className="flex items-center gap-1.5">
-                          <Clock className="w-3 h-3" />
-                          {order.lastUpdated}
-                        </span>
-                      </div>
-                    </div>
-                    <div className="flex justify-between items-end mt-1">
-                      <p className="text-sm font-bold text-on-surface-variant flex items-center gap-1.5 px-3 py-1 bg-surface-container rounded-full">
-                        <Users className="w-4 h-4" /> {order.persons} Households
-                      </p>
-                      <div className={`px-3 py-1 text-xs font-bold uppercase tracking-wider rounded-full shadow-sm ${getUrgencyColor(order.urgency)}`}>
-                        {order.urgency} Priority
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="flex-1 overflow-y-auto">
-                    <ul className="divide-y divide-outline-variant/10">
-                      {order.items.map((item, idx) => {
-                        const isFullyPacked = item.packedQty === item.qty;
-                        return (
-                          <li
-                            key={item.id}
-                            className={`p-4 flex items-start gap-4 transition-colors ${
-                              isFullyPacked
-                                ? "opacity-50 bg-surface-container-lowest grayscale"
-                                : idx % 2 === 0
-                                ? "bg-surface-bright"
-                                : "bg-surface-container-lowest"
-                            }`}
-                          >
-                            <button
-                              onClick={() => toggleItemPacked(order.id, item.id)}
-                              className={`flex-shrink-0 mt-0.5 w-7 h-7 rounded-md border-2 flex items-center justify-center transition-colors hover:border-primary ${
-                                isFullyPacked
-                                  ? "border-primary bg-primary text-on-primary"
-                                  : item.packedQty > 0
-                                  ? "border-primary text-primary bg-primary/10"
-                                  : "border-outline-variant text-transparent bg-surface-bright"
-                              }`}
-                            >
-                              {isFullyPacked ? (
-                                <CheckCircle2 className="w-5 h-5" />
-                              ) : item.packedQty > 0 ? (
-                                <span className="text-sm font-black">-</span>
-                              ) : null}
-                            </button>
-                            <div className="flex-1 overflow-hidden">
-                              <div className="flex flex-wrap sm:flex-nowrap justify-between items-start sm:items-center gap-3">
-                                <p
-                                  className={`font-bold text-[1.1rem] leading-snug flex-1 min-w-0 break-words ${
-                                    isFullyPacked ? "line-through text-on-surface-variant" : "text-on-surface"
-                                  }`}
-                                >
-                                  {item.name}
-                                </p>
-                                <div className="flex items-center gap-1.5 font-black text-xl sm:text-2xl leading-none bg-surface-container px-2 py-1.5 shrink-0 rounded-lg whitespace-nowrap overflow-hidden">
-                                  <input
-                                    type="number"
-                                    min="0"
-                                    max={item.qty}
-                                    value={item.packedQty === 0 ? "" : item.packedQty}
-                                    placeholder="0"
-                                    onChange={(e) => updateItemPackedQty(order.id, item.id, parseInt(e.target.value) || 0)}
-                                    className={`w-10 sm:w-16 bg-surface-container-low text-center focus:ring-2 focus:ring-primary outline-none border-none rounded ${
-                                      item.packedQty > 0 ? "text-primary" : "text-on-surface-variant"
-                                    }`}
-                                  />
-                                  <span className="text-on-surface-variant opacity-40 font-bold text-lg sm:text-xl">/</span>
-                                  <span className={isFullyPacked ? "text-on-surface-variant" : "text-on-surface"}>{item.qty}</span>
-                                </div>
-                              </div>
-                            </div>
-                          </li>
-                        );
-                      })}
-                    </ul>
-                  </div>
-
-                  <div className="p-4 bg-surface-container-lowest border-t border-outline-variant/10">
-                    <button
-                      disabled={!somePacked}
-                      onClick={() => markOrderReady(order.id)}
-                      className={`w-full py-4 rounded-xl font-bold text-lg flex items-center justify-center gap-2 transition-all ${
-                        allPacked
-                          ? "bg-primary text-on-primary shadow-lg hover:brightness-110 active:scale-95"
-                          : somePacked
-                          ? "bg-tertiary text-on-tertiary shadow-lg hover:brightness-110 active:scale-95"
-                          : "bg-surface-container text-on-surface-variant opacity-70 cursor-not-allowed"
-                      }`}
-                    >
-                      {allPacked ? (
-                        <><Send className="w-5 h-5" /> Ready for Dispatch</>
-                      ) : somePacked ? (
-                        <><Send className="w-5 h-5" /> Dispatch Partial & Split</>
-                      ) : (
-                        "Pack items to dispatch"
-                      )}
-                    </button>
-                  </div>
-                </div>
-              );
-            })}
+            {locationCards.map(card => (
+              <LocationCardComponent
+                key={card.locationKey}
+                card={card}
+                now={now}
+                onToggleItemPacked={handleToggleItemPacked}
+                onUpdateItemPackedQty={handleUpdateItemPackedQty}
+                onDispatch={handleDispatch}
+              />
+            ))}
           </div>
 
-          {orders.filter((o) => o.status === "packing").length === 0 && (
+          {locationCards.length === 0 && (
             <div className="py-24 text-center flex flex-col items-center justify-center">
               <div className="w-24 h-24 bg-primary/10 text-primary rounded-full flex items-center justify-center mb-6 shadow-inner">
                 <CheckCircle2 className="w-12 h-12" />
@@ -472,15 +425,15 @@ export function Dashboard() {
               <Box className="w-5 h-5 text-primary" />
               Aggregated Needs
             </h2>
-            <p className="text-sm text-on-surface-variant mt-1">Remaining unpacked items across all active dispatches.</p>
+            <p className="text-sm text-on-surface-variant mt-1">Remaining unpacked items across all locations.</p>
           </div>
 
           <div className="flex-1 overflow-y-auto p-6">
-            {aggregatedItems.length === 0 ? (
+            {aggregatedNeeds.length === 0 ? (
               <p className="text-center text-on-surface-variant text-sm py-8">No active dispatches.</p>
             ) : (
               <ul className="space-y-3">
-                {aggregatedItems.map((item) => (
+                {aggregatedNeeds.map(item => (
                   <li
                     key={`${item.name}-${item.unit}`}
                     className="flex justify-between items-center bg-surface-container-low px-4 py-3 rounded-xl border border-outline-variant/10"

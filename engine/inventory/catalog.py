@@ -120,6 +120,8 @@ CATALOG: dict[str, dict] = {
             "drinking water", "tubig na inumin", "mineral water",
             "purified water", "tubig", "water", "agua", "inumin",
             "bottled water", "wilkins", "absolute", "nature spring",
+            "safe water", "clean water", "potable water",
+            "safe drinking water", "malinis na tubig",
         ],
         # WHO/SPHERE minimum: 3 L/person/day × 3 days = 9 L
         "estimate": {"multiplier": 9, "base": "person", "unit": "L"},
