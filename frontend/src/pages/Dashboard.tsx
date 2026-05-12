@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useMemo } from "react";
 import { TopNav } from "../components/TopNav";
 import { MobileNav } from "../components/MobileNav";
 import { LocationCard as LocationCardComponent } from "../components/LocationCard";
-import { CheckCircle2, Box, ClipboardList } from "lucide-react";
+import { CheckCircle2, ClipboardList } from "lucide-react";
 import type { ApiMessage, ApiLocation, LocationCard, AggregatedItem, ItemSource } from "../types";
 
 const URGENCY_WEIGHT: Record<string, number> = { critical: 4, high: 3, medium: 2, low: 1 };
@@ -380,19 +380,39 @@ export function Dashboard() {
         <main className="flex-1 overflow-y-auto p-6 md:p-8">
           <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-6">
             <div>
-              <h1 className="font-headline font-bold text-2xl text-primary leading-relaxed">
-                Needs & Dispatch Display System (NDS)
+              <h1
+                className="font-display font-bold leading-tight"
+                style={{ fontSize: 30, color: "var(--color-ink-soft)", letterSpacing: "-0.025em", margin: 0 }}
+              >
+                pulso
               </h1>
-              <p className="text-on-surface-variant text-sm font-medium">Real-time synced dispatch fulfillment view.</p>
+              <p className="text-sm mt-1" style={{ color: "var(--color-ash)" }}>
+                real-time synced fulfillment view. needs matched against stocked supplies.
+              </p>
             </div>
-            <div className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-bold uppercase tracking-wider shrink-0 border transition-colors ${
-              wsConnected
-                ? "bg-primary/10 text-primary border-primary/20"
-                : "bg-yellow-100 text-yellow-700 border-yellow-200"
-            }`}>
-              <span className={`w-2 h-2 rounded-full animate-pulse ${wsConnected ? "bg-primary" : "bg-yellow-500"}`}></span>
-              {wsConnected ? "Live" : "Reconnecting…"}
-            </div>
+            {wsConnected ? (
+              <div
+                className="inline-flex items-center gap-2 px-3 py-1 rounded-full text-xs font-semibold shrink-0"
+                style={{
+                  background: "rgba(56,107,74,0.15)",
+                  color: "var(--color-damay)",
+                  border: "1px solid rgba(56,107,74,0.35)",
+                }}
+              >
+                <span
+                  className="w-1.5 h-1.5 rounded-full"
+                  style={{ background: "var(--color-damay)", animation: "akbay-pulse 2s ease-in-out infinite" }}
+                />
+                live
+              </div>
+            ) : (
+              <div
+                className="inline-flex items-center gap-2 px-3 py-1 rounded-full shrink-0 ak-caps"
+                style={{ background: "var(--color-tabang)", color: "var(--color-bone)" }}
+              >
+                OFFLINE
+              </div>
+            )}
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 2xl:grid-cols-3 gap-6 pb-20">
@@ -410,41 +430,70 @@ export function Dashboard() {
 
           {locationCards.length === 0 && (
             <div className="py-24 text-center flex flex-col items-center justify-center">
-              <div className="w-24 h-24 bg-primary/10 text-primary rounded-full flex items-center justify-center mb-6 shadow-inner">
-                <CheckCircle2 className="w-12 h-12" />
+              <div
+                className="w-20 h-20 rounded-full flex items-center justify-center mb-6"
+                style={{ background: "var(--color-damay-soft)", color: "var(--color-damay)" }}
+              >
+                <CheckCircle2 className="w-10 h-10" strokeWidth={1.75} />
               </div>
-              <h2 className="text-3xl font-headline font-black text-on-surface mb-3">All Clear!</h2>
-              <p className="text-on-surface-variant text-lg">No pending dispatches at the moment. Great job!</p>
+              <h2 className="font-display font-bold mb-2" style={{ fontSize: 26, color: "var(--color-ink-soft)", letterSpacing: "-0.02em" }}>
+                all clear
+              </h2>
+              <p className="text-sm" style={{ color: "var(--color-ash)" }}>
+                no pending dispatches. the queue is quiet.
+              </p>
             </div>
           )}
         </main>
 
-        <aside className="w-[340px] xl:w-[400px] border-l border-outline-variant/20 bg-surface flex flex-col shrink-0 hidden md:flex z-10 shadow-[-4px_0_24px_rgba(0,0,0,0.02)]">
-          <div className="p-6 border-b border-outline-variant/10 bg-surface-bright">
-            <h2 className="font-headline font-bold text-xl inline-flex items-center gap-2">
-              <Box className="w-5 h-5 text-primary" />
-              Aggregated Needs
+        <aside
+          className="w-[340px] xl:w-[400px] flex flex-col shrink-0 hidden md:flex z-10"
+          style={{ background: "var(--color-paper-warm)", borderLeft: "1px solid var(--color-paper-edge)" }}
+        >
+          <div className="p-6" style={{ borderBottom: "1px solid var(--color-paper-edge)" }}>
+            <h2
+              className="font-display font-bold inline-flex items-center gap-2"
+              style={{ fontSize: 20, color: "var(--color-ink-soft)", letterSpacing: "-0.015em", lineHeight: 1.15 }}
+            >
+              <ClipboardList className="w-5 h-5" strokeWidth={1.75} style={{ color: "var(--color-ash)" }} />
+              aggregated needs
             </h2>
-            <p className="text-sm text-on-surface-variant mt-1">Remaining unpacked items across all locations.</p>
+            <p className="text-xs mt-1" style={{ color: "var(--color-ash)" }}>
+              remaining unpacked items across all active dispatches.
+            </p>
           </div>
 
-          <div className="flex-1 overflow-y-auto p-6">
+          <div className="flex-1 overflow-y-auto px-6 py-2">
             {aggregatedNeeds.length === 0 ? (
-              <p className="text-center text-on-surface-variant text-sm py-8">No active dispatches.</p>
+              <p className="text-center text-sm py-8" style={{ color: "var(--color-ash)" }}>
+                no active dispatches.
+              </p>
             ) : (
-              <ul className="space-y-3">
-                {aggregatedNeeds.map(item => (
+              <ul>
+                {aggregatedNeeds.map((item, idx) => (
                   <li
                     key={`${item.name}-${item.unit}`}
-                    className="flex justify-between items-center bg-surface-container-low px-4 py-3 rounded-xl border border-outline-variant/10"
+                    className="flex justify-between items-baseline py-2.5"
+                    style={idx === 0 ? {} : { borderTop: "1px solid var(--color-paper-edge)" }}
                   >
-                    <div className="font-bold text-on-surface">
+                    <div className="text-sm" style={{ color: "var(--color-ink)" }}>
                       {item.name}
-                      {item.unit && <span className="ml-2 text-xs font-normal text-on-surface-variant">({item.unit})</span>}
+                      {item.unit && (
+                        <span className="ml-1 text-[11px]" style={{ color: "var(--color-ash)", fontFamily: "var(--font-mono)" }}>
+                          ({item.unit})
+                        </span>
+                      )}
                     </div>
-                    <div className="text-2xl font-black text-primary">
+                    <div
+                      className="font-display font-bold"
+                      style={{ fontSize: 18, color: "var(--color-ink)", letterSpacing: "-0.01em" }}
+                    >
                       {item.remaining}
-                      {item.hasUnknownQty && <span className="ml-1 text-sm text-on-surface-variant">+?</span>}
+                      {item.hasUnknownQty && (
+                        <sub style={{ fontFamily: "var(--font-mono)", fontSize: 11, fontWeight: 500, color: "var(--color-ash)", verticalAlign: "baseline", marginLeft: 2 }}>
+                          +?
+                        </sub>
+                      )}
                     </div>
                   </li>
                 ))}
@@ -452,15 +501,25 @@ export function Dashboard() {
             )}
           </div>
 
-          <div className="p-4 bg-surface-container-low border-t border-outline-variant/10">
-            <button className="w-full py-3 bg-surface text-on-surface font-bold rounded-lg border border-outline-variant shadow-sm hover:bg-surface-container transition-colors flex items-center justify-center gap-2">
-              <ClipboardList className="w-4 h-4" /> Print Fulfillment Picklist
+          <div className="p-4" style={{ borderTop: "1px solid var(--color-paper-edge)" }}>
+            <button
+              className="w-full py-2.5 rounded-lg text-sm font-semibold flex items-center justify-center gap-2 transition-colors"
+              style={{
+                background: "var(--color-paper)",
+                color: "var(--color-ink)",
+                border: "1px solid var(--color-paper-edge)",
+              }}
+            >
+              <ClipboardList className="w-4 h-4" strokeWidth={1.75} />
+              print fulfillment picklist
             </button>
           </div>
         </aside>
       </div>
 
       <MobileNav />
+
+      <style>{`@keyframes akbay-pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.35; } }`}</style>
     </div>
   );
 }

@@ -1,38 +1,51 @@
 import { Link } from "react-router-dom";
-import { Mountain, Bell, HelpCircle, Menu, Home, Users, Map, Droplet, ShoppingBag, Tent, Hand as CleanHands, Shirt, Zap, Baby, ArrowUpRight, Copy } from "lucide-react";
+import { Bell, HelpCircle, Menu, Home, Users, Map, Droplet, ShoppingBag, Tent, Hand as CleanHands, Shirt, Zap, Baby, ArrowUpRight, Copy } from "lucide-react";
 import { MobileNav } from "../components/MobileNav";
+import { Brand } from "../components/Brand";
 
 export function DonorView() {
   return (
     <div className="bg-background text-on-surface min-h-screen">
-      <header className="bg-surface dark:bg-inverse-surface text-primary dark:text-primary-fixed-dim font-headline text-xl leading-relaxed docked full-width top-0 bg-surface-container-low dark:bg-surface-dim shadow-sm flex justify-between items-center w-full px-6 py-3 sticky z-50">
-        <div className="flex items-center gap-3">
-          <Mountain className="w-8 h-8" />
-          <span className="font-headline font-bold text-primary dark:text-primary-fixed-dim">Terra Relief</span>
-        </div>
-        
-        <div className="hidden md:flex items-center gap-8">
-          <nav className="flex gap-6">
-            <Link to="/" className="text-on-surface-variant dark:text-outline-variant hover:bg-surface-container-high dark:hover:bg-surface-variant transition-colors px-3 py-1 rounded-lg">Live Feed</Link>
-            <button className="text-on-surface-variant dark:text-outline-variant hover:bg-surface-container-high dark:hover:bg-surface-variant transition-colors px-3 py-1 rounded-lg">Triage</button>
-            <Link to="/donor-view" className="text-primary dark:text-primary-fixed-dim border-b-2 border-primary font-bold px-3 py-1">Donor View</Link>
+      <header
+        className="flex justify-between items-center w-full px-6 py-3 sticky top-0 z-50"
+        style={{ background: "var(--color-dagat)", color: "var(--color-bone)", borderBottom: "1px solid var(--color-dagat-deep)" }}
+      >
+        <Brand variant="on-dark" size={28} linkTo="/" />
+
+        <div className="hidden md:flex items-center gap-6">
+          <nav className="flex gap-1">
+            <Link
+              to="/"
+              className="px-3 py-1.5 rounded-md text-sm transition-colors"
+              style={{ color: "rgba(251,246,232,0.7)" }}
+            >
+              pulso
+            </Link>
+            <Link
+              to="/donor-view"
+              className="px-3 py-1.5 rounded-md text-sm font-semibold"
+              style={{ background: "rgba(224,138,30,0.18)", color: "var(--color-bone)" }}
+            >
+              donor view
+            </Link>
           </nav>
-          
-          <div className="flex items-center gap-4">
-            <button className="p-2 rounded-full hover:bg-surface-container-high">
-              <Bell className="text-on-surface-variant w-5 h-5" />
+
+          <div className="flex items-center gap-2" style={{ color: "rgba(251,246,232,0.7)" }}>
+            <button className="p-2 rounded-full" aria-label="notifications">
+              <Bell className="w-5 h-5" strokeWidth={1.75} />
             </button>
-            <button className="p-2 rounded-full hover:bg-surface-container-high">
-              <HelpCircle className="text-on-surface-variant w-5 h-5" />
+            <button className="p-2 rounded-full" aria-label="help">
+              <HelpCircle className="w-5 h-5" strokeWidth={1.75} />
             </button>
-            <div className="w-8 h-8 rounded-full bg-primary-fixed flex items-center justify-center overflow-hidden border border-outline-variant">
-              <img alt="Operator Profile" className="w-full h-full object-cover" src="https://lh3.googleusercontent.com/aida-public/AB6AXuAPX-x1J9a7a_yOSKj3V93sOwuyLyGW6X3rwc9LmFmIMyOWu6Y1yzkC6sECGC3ggo-BQpdxuZ184G01oGUDhb8PyNG2yAw_WOMWatENVqPL0duvG0hDQOvybCfoLHw04-1pVOOKi5j0cirEH-rxv01MuYbnLRZfW41J1SoyvF9SlWsCSRHbPQSqoLYJEcvk7XXYEEeIJuSWUSytQ-0rf9367U4FbQmGkxecjyg3EM8j70HVp3weSu1HfWY0DPfu4kwbJ2pndQe80peK" />
-            </div>
           </div>
         </div>
-        
-        <button className="md:hidden p-2 rounded-full hover:bg-surface-container-high">
-          <Menu className="w-6 h-6" />
+
+        <button
+          className="md:hidden p-2 rounded-full"
+          style={{ color: "var(--color-bone)" }}
+          aria-label="menu"
+        >
+          <Menu className="w-6 h-6" strokeWidth={1.75} />
         </button>
       </header>
 

@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Link } from "react-router-dom";
 import { ArrowLeft, HelpCircle, Keyboard, Mic, Camera, Mail, FlaskConical, Loader2, CheckCircle2 } from "lucide-react";
 import { MobileNav } from "../components/MobileNav";
+import { Brand } from "../components/Brand";
 
 export function IntakeChannelSelector() {
   const [seeding, setSeeding] = useState(false);
@@ -24,24 +25,37 @@ export function IntakeChannelSelector() {
 
   return (
     <div className="flex flex-col min-h-screen">
-      <header className="flex justify-between items-center w-full px-6 py-4 sticky top-0 z-50 bg-surface dark:bg-inverse-surface shadow-sm">
-        <div className="flex items-center gap-4">
-          <Link to="/" className="flex items-center justify-center w-10 h-10 rounded-full hover:bg-surface-container-high transition-colors active:scale-95 duration-150">
-            <ArrowLeft className="text-primary dark:text-primary-fixed-dim w-6 h-6" />
+      <header
+        className="flex justify-between items-center w-full px-6 py-3 sticky top-0 z-50"
+        style={{ background: "var(--color-dagat)", color: "var(--color-bone)", borderBottom: "1px solid var(--color-dagat-deep)" }}
+      >
+        <div className="flex items-center gap-3">
+          <Link
+            to="/"
+            className="flex items-center justify-center w-9 h-9 rounded-full active:scale-95 duration-150"
+            style={{ color: "var(--color-bone)" }}
+            aria-label="back"
+          >
+            <ArrowLeft className="w-5 h-5" strokeWidth={1.75} />
           </Link>
-          <h1 className="font-headline font-bold text-xl text-primary dark:text-primary-fixed-dim leading-relaxed">
-            Brgy San Roque Intake
-          </h1>
+          <Brand variant="on-dark" size={26} linkTo={null} />
         </div>
         <div className="flex items-center gap-2">
-          <HelpCircle className="text-on-surface-variant dark:text-outline-variant w-6 h-6" />
+          <HelpCircle className="w-5 h-5" strokeWidth={1.75} style={{ color: "rgba(251,246,232,0.7)" }} />
         </div>
       </header>
 
       <main className="flex-1 px-6 pt-8 pb-32 max-w-lg mx-auto w-full">
         <section className="mb-10">
-          <h2 className="text-3xl font-bold mb-2 text-on-surface font-headline">How did this come in?</h2>
-          <p className="text-on-surface-variant font-medium">Select a channel to begin logging relief needs.</p>
+          <h2
+            className="font-display font-bold mb-2"
+            style={{ fontSize: 28, color: "var(--color-ink-soft)", letterSpacing: "-0.02em", lineHeight: 1.15 }}
+          >
+            add a report
+          </h2>
+          <p className="text-sm" style={{ color: "var(--color-ash)" }}>
+            pick a channel to log what came in. SMS, voice note, or a photo of a handwritten list.
+          </p>
         </section>
 
         <div className="grid grid-cols-1 gap-6">
@@ -50,8 +64,8 @@ export function IntakeChannelSelector() {
               <Keyboard className="w-8 h-8" />
             </div>
             <div className="flex-1">
-              <h3 className="text-xl font-bold text-on-surface mb-1 font-headline">Type message</h3>
-              <p className="text-sm text-on-surface-variant">Walk-in / Viber / Messenger relay</p>
+              <h3 className="text-xl font-bold text-on-surface mb-1 font-headline">type message</h3>
+              <p className="text-sm text-on-surface-variant">walk-in, Viber, or Messenger relay</p>
             </div>
           </Link>
 
@@ -60,8 +74,8 @@ export function IntakeChannelSelector() {
               <Mic className="w-8 h-8" />
             </div>
             <div className="flex-1">
-              <h3 className="text-xl font-bold text-on-surface mb-1 font-headline">Voice note</h3>
-              <p className="text-sm text-on-surface-variant">Record or upload clip</p>
+              <h3 className="text-xl font-bold text-on-surface mb-1 font-headline">voice note</h3>
+              <p className="text-sm text-on-surface-variant">record or upload a clip</p>
             </div>
           </button>
 
@@ -70,8 +84,8 @@ export function IntakeChannelSelector() {
               <Camera className="w-8 h-8" />
             </div>
             <div className="flex-1">
-              <h3 className="text-xl font-bold text-on-surface mb-1 font-headline">Photo of note</h3>
-              <p className="text-sm text-on-surface-variant">Handwritten list or document</p>
+              <h3 className="text-xl font-bold text-on-surface mb-1 font-headline">photo of note</h3>
+              <p className="text-sm text-on-surface-variant">handwritten list or a document</p>
             </div>
           </button>
         </div>
@@ -85,9 +99,9 @@ export function IntakeChannelSelector() {
             {seeding ? <Loader2 className="w-5 h-5 animate-spin" /> : seeded !== null && seeded >= 0 ? <CheckCircle2 className="w-5 h-5" /> : <FlaskConical className="w-5 h-5" />}
           </div>
           <div className="text-left">
-            <p className="font-bold text-on-surface text-sm">Load synthetic messages</p>
+            <p className="font-bold text-on-surface text-sm">load synthetic messages</p>
             <p className="text-xs text-on-surface-variant">
-              {seeding ? "Sending to inbox…" : seeded !== null && seeded >= 0 ? `${seeded} messages queued for processing` : seeded === -1 ? "Failed — check server" : "Send test dataset to inbox"}
+              {seeding ? "sending to inbox…" : seeded !== null && seeded >= 0 ? `${seeded} messages queued for processing` : seeded === -1 ? "failed — check the server" : "send test dataset to inbox"}
             </p>
           </div>
         </button>
@@ -100,14 +114,14 @@ export function IntakeChannelSelector() {
             <div>
               <p className="font-bold text-on-surface text-sm flex items-center gap-2">
                 SMS auto-intake
-                <span className="text-[10px] bg-primary/10 text-primary px-2 py-0.5 rounded-full uppercase tracking-tighter">✓ Active</span>
+                <span className="ak-caps px-2 py-0.5 rounded-full" style={{ background: "var(--color-damay-soft)", color: "var(--color-damay)", fontSize: 10, letterSpacing: "0.06em" }}>active</span>
               </p>
-              <p className="text-on-surface-variant text-xs">Waiting for incoming messages</p>
+              <p className="text-on-surface-variant text-xs">waiting for incoming messages</p>
             </div>
           </div>
           <div className="text-right">
             <p className="text-2xl font-black text-primary leading-none">47</p>
-            <p className="text-[10px] font-bold text-on-surface-variant uppercase tracking-widest">Today</p>
+            <p className="ak-caps mt-0.5" style={{ color: "var(--color-ash)" }}>today</p>
           </div>
         </section>
       </main>

@@ -1,42 +1,45 @@
 import { Link, useLocation } from "react-router-dom";
-import { PlusCircle, LayoutDashboard, User, Inbox as InboxIcon } from "lucide-react";
+import { PlusCircle, Activity, User, Inbox as InboxIcon } from "lucide-react";
+
+type Tab = {
+  to: string;
+  label: string;
+  isActive: (path: string) => boolean;
+  icon: React.ReactNode;
+};
+
+const TABS: Tab[] = [
+  { to: "/",       label: "pulso",   isActive: p => p === "/",               icon: <Activity className="w-6 h-6" strokeWidth={1.75} /> },
+  { to: "/inbox",  label: "inbox",   isActive: p => p === "/inbox",          icon: <InboxIcon className="w-6 h-6" strokeWidth={1.75} /> },
+  { to: "/intake", label: "intake",  isActive: p => p.startsWith("/intake"), icon: <PlusCircle className="w-6 h-6" strokeWidth={1.75} /> },
+  { to: "/profile",label: "profile", isActive: p => p === "/profile",        icon: <User className="w-6 h-6" strokeWidth={1.75} /> },
+];
 
 export function MobileNav() {
-  const location = useLocation();
+  const { pathname } = useLocation();
 
   return (
-    <nav className="md:hidden fixed bottom-0 left-0 w-full z-50 flex justify-around items-center px-4 pb-4 pt-2 bg-surface-container-highest dark:bg-inverse-surface rounded-t-xl shadow-lg">
-      <Link 
-        to="/" 
-        className={`flex flex-col items-center justify-center rounded-xl px-4 py-1 active:scale-90 transition-transform duration-100 ${location.pathname === '/' ? 'bg-primary-container dark:bg-primary text-on-primary-container dark:text-on-primary' : 'text-on-surface-variant dark:text-outline-variant hover:bg-primary-fixed dark:hover:bg-primary-fixed-dim'}`}
-      >
-        <LayoutDashboard className="w-6 h-6" fill={location.pathname === '/' ? "currentColor" : "none"} />
-        <span className="font-label text-[10px] uppercase tracking-wider mt-1">Updates</span>
-      </Link>
-
-      <Link 
-        to="/inbox" 
-        className={`flex flex-col items-center justify-center rounded-xl px-4 py-1 active:scale-90 transition-transform duration-100 ${location.pathname === '/inbox' ? 'bg-primary-container dark:bg-primary text-on-primary-container dark:text-on-primary' : 'text-on-surface-variant dark:text-outline-variant hover:bg-primary-fixed dark:hover:bg-primary-fixed-dim'}`}
-      >
-        <InboxIcon className="w-6 h-6" fill={location.pathname === '/inbox' ? "currentColor" : "none"} />
-        <span className="font-label text-[10px] uppercase tracking-wider mt-1">Inbox</span>
-      </Link>
-      
-      <Link 
-        to="/intake" 
-        className={`flex flex-col items-center justify-center rounded-xl px-4 py-1 active:scale-90 transition-transform duration-100 ${location.pathname.startsWith('/intake') ? 'bg-primary-container dark:bg-primary text-on-primary-container dark:text-on-primary' : 'text-on-surface-variant dark:text-outline-variant hover:bg-primary-fixed dark:hover:bg-primary-fixed-dim'}`}
-      >
-        <PlusCircle className="w-6 h-6" fill={location.pathname.startsWith('/intake') ? "currentColor" : "none"} />
-        <span className="font-label text-[10px] uppercase tracking-wider mt-1">Intake</span>
-      </Link>
-
-      <Link 
-        to="/profile" 
-        className={`flex flex-col items-center justify-center rounded-xl px-4 py-1 active:scale-90 transition-transform duration-100 ${location.pathname === '/profile' ? 'bg-primary-container dark:bg-primary text-on-primary-container dark:text-on-primary' : 'text-on-surface-variant dark:text-outline-variant hover:bg-primary-fixed dark:hover:bg-primary-fixed-dim'}`}
-      >
-        <User className="w-6 h-6" fill={location.pathname === '/profile' ? "currentColor" : "none"} />
-        <span className="font-label text-[10px] uppercase tracking-wider mt-1">Profile</span>
-      </Link>
+    <nav
+      className="md:hidden fixed bottom-0 left-0 w-full z-50 flex justify-around items-center px-4 pb-4 pt-2 rounded-t-xl shadow-lg"
+      style={{ background: "var(--color-dagat)" }}
+    >
+      {TABS.map(t => {
+        const active = t.isActive(pathname);
+        return (
+          <Link
+            key={t.to}
+            to={t.to}
+            className="flex flex-col items-center justify-center rounded-xl px-4 py-1.5 active:scale-95 transition-transform duration-100"
+            style={{
+              background: active ? "rgba(224,138,30,0.18)" : "transparent",
+              color: active ? "var(--color-bone)" : "rgba(251,246,232,0.7)",
+            }}
+          >
+            {t.icon}
+            <span className="text-[10px] mt-1" style={{ letterSpacing: 0 }}>{t.label}</span>
+          </Link>
+        );
+      })}
     </nav>
   );
 }

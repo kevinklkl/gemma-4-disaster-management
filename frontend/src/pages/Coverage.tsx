@@ -1,6 +1,6 @@
 import { TopNav } from "../components/TopNav";
 import { MobileNav } from "../components/MobileNav";
-import { Search, Bell, HelpCircle, Droplet, Utensils, Tent, Cross, MapPin } from "lucide-react";
+import { AlertTriangle, MapPin as MapPinIcon, CheckCircle2 } from "lucide-react";
 import { MapContainer, TileLayer, Marker, Popup, Circle, CircleMarker } from "react-leaflet";
 import "leaflet/dist/leaflet.css";
 import L from "leaflet";
@@ -31,9 +31,60 @@ export function Coverage() {
     { id: "REQ-008", type: "Medical", location: [10.2850, 123.8700], desc: "First aid supplies low", color: "#E2445C" },
   ];
 
+  const totals = needs.reduce(
+    (acc, n) => {
+      if (n.type === "Medical") acc.critical += 1;
+      else if (n.type === "Shelter" || n.type === "Water") acc.high += 1;
+      else if (n.type === "Food") acc.medium += 1;
+      return acc;
+    },
+    { critical: 0, high: 0, medium: 0, covered: opsCenters.length }
+  );
+
   return (
-    <div className="h-screen bg-surface-container-low font-body text-on-surface flex flex-col overflow-hidden">
+    <div className="h-screen font-body flex flex-col overflow-hidden" style={{ background: "var(--color-paper)", color: "var(--color-ink)" }}>
       <TopNav />
+      <div className="px-6 md:px-8 pt-5 pb-4" style={{ background: "var(--color-paper)" }}>
+        <h1
+          className="font-display font-bold leading-tight mb-1"
+          style={{ fontSize: 30, color: "var(--color-ink-soft)", letterSpacing: "-0.025em", margin: 0 }}
+        >
+          coverage
+        </h1>
+        <p className="text-sm mb-4" style={{ color: "var(--color-ash)" }}>
+          live map of barangays with active or resolved requests.
+        </p>
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3.5">
+          {[
+            { n: totals.critical, label: "critical",     bg: "rgba(168,48,46,0.12)",      fg: "var(--color-tabang)", icon: <AlertTriangle className="w-4 h-4" strokeWidth={2.2} /> },
+            { n: totals.high,     label: "high",         bg: "var(--color-signal-soft)",  fg: "var(--color-signal)", icon: <MapPinIcon className="w-4 h-4" strokeWidth={2} /> },
+            { n: totals.medium,   label: "medium",       bg: "var(--color-araw-soft)",    fg: "var(--color-ember)",  icon: <MapPinIcon className="w-4 h-4" strokeWidth={2} /> },
+            { n: totals.covered,  label: "covered",      bg: "var(--color-damay-soft)",   fg: "var(--color-damay)",  icon: <CheckCircle2 className="w-4 h-4" strokeWidth={2.2} /> },
+          ].map(s => (
+            <div
+              key={s.label}
+              className="rounded-xl px-5 py-4 inline-flex items-center gap-4"
+              style={{ background: "var(--color-paper-warm)", border: "1px solid var(--color-paper-edge)" }}
+            >
+              <span
+                className="inline-flex items-center justify-center rounded-full"
+                style={{ width: 36, height: 36, background: s.bg, color: s.fg, flexShrink: 0 }}
+              >
+                {s.icon}
+              </span>
+              <div>
+                <div
+                  className="font-display font-bold"
+                  style={{ fontSize: 30, color: "var(--color-ink)", letterSpacing: "-0.03em", lineHeight: 1 }}
+                >
+                  {s.n}
+                </div>
+                <div className="ak-caps mt-1" style={{ color: "var(--color-ash)" }}>{s.label}</div>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
       <div className="flex flex-1 overflow-hidden relative">
         <main className="flex-1 w-full relative z-0">
            <MapContainer center={position} zoom={12} scrollWheelZoom={true} className="w-full h-full">
@@ -82,13 +133,21 @@ export function Coverage() {
             ))}
           </MapContainer>
 
-          <div className="absolute top-6 right-6 z-[400] bg-surface/95 backdrop-blur-md p-4 rounded-xl shadow-lg border border-outline-variant/20 min-w-[160px]">
-             <h3 className="font-headline font-bold text-sm text-on-surface mb-3 uppercase tracking-wider">Need Category</h3>
-             <div className="space-y-2.5 text-xs font-medium text-on-surface">
-               <div className="flex items-center gap-2"><div className="w-3 h-3 rounded-full bg-[#00A3FF]"></div> Drinking Water</div>
-               <div className="flex items-center gap-2"><div className="w-3 h-3 rounded-full bg-[#FDAB3D]"></div> Food Packs</div>
-               <div className="flex items-center gap-2"><div className="w-3 h-3 rounded-full bg-[#a25ddc]"></div> Shelter</div>
-               <div className="flex items-center gap-2"><div className="w-3 h-3 rounded-full bg-[#E2445C]"></div> Medical</div>
+          <div
+            className="absolute top-4 right-4 z-[400] p-4 rounded-xl min-w-[160px]"
+            style={{
+              background: "rgba(244,236,216,0.95)",
+              backdropFilter: "blur(8px)",
+              border: "1px solid var(--color-paper-edge)",
+              boxShadow: "var(--shadow-2)",
+            }}
+          >
+             <h3 className="ak-caps mb-3" style={{ color: "var(--color-ash)" }}>need category</h3>
+             <div className="space-y-2 text-xs" style={{ color: "var(--color-ink)" }}>
+               <div className="flex items-center gap-2"><div className="w-2.5 h-2.5 rounded-full" style={{ background: "#00A3FF" }}></div> drinking water</div>
+               <div className="flex items-center gap-2"><div className="w-2.5 h-2.5 rounded-full" style={{ background: "#FDAB3D" }}></div> food packs</div>
+               <div className="flex items-center gap-2"><div className="w-2.5 h-2.5 rounded-full" style={{ background: "#a25ddc" }}></div> shelter</div>
+               <div className="flex items-center gap-2"><div className="w-2.5 h-2.5 rounded-full" style={{ background: "#E2445C" }}></div> medical</div>
              </div>
           </div>
         </main>

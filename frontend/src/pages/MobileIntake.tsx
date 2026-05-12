@@ -1,7 +1,8 @@
 import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { ArrowLeft, Bell, MapPin, Search, Phone, Send, Info, Loader2 } from "lucide-react";
+import { ArrowLeft, Bell, Search, Phone, Send, Info, Loader2 } from "lucide-react";
 import { MobileNav } from "../components/MobileNav";
+import { Brand } from "../components/Brand";
 
 export function MobileIntake() {
   const navigate = useNavigate();
@@ -39,29 +40,37 @@ export function MobileIntake() {
 
   return (
     <div className="bg-background text-on-background min-h-screen flex flex-col">
-      <nav className="bg-surface-container-low dark:bg-surface-dim flex justify-between items-center w-full px-6 py-3 sticky top-0 z-50 shadow-sm">
+      <nav
+        className="flex justify-between items-center w-full px-6 py-3 sticky top-0 z-50"
+        style={{ background: "var(--color-dagat)", color: "var(--color-bone)", borderBottom: "1px solid var(--color-dagat-deep)" }}
+      >
         <div className="flex items-center gap-3">
-          <Link to="/intake" className="active:scale-95 duration-150 p-2 hover:bg-surface-container-high rounded-full">
-            <ArrowLeft className="text-primary w-6 h-6" />
+          <Link
+            to="/intake"
+            className="active:scale-95 duration-150 p-2 rounded-full"
+            style={{ color: "var(--color-bone)" }}
+            aria-label="back"
+          >
+            <ArrowLeft className="w-5 h-5" strokeWidth={1.75} />
           </Link>
-          <h1 className="font-headline font-bold text-xl leading-relaxed text-primary">Type message</h1>
+          <Brand variant="on-dark" size={26} linkTo={null} />
         </div>
-        <div className="flex items-center gap-4">
-          <Bell className="text-on-surface-variant w-5 h-5" />
-          <div className="w-8 h-8 rounded-full bg-secondary-container flex items-center justify-center overflow-hidden border border-outline-variant">
-            <img alt="Operator Profile" src="https://lh3.googleusercontent.com/aida-public/AB6AXuB4c4s0z6ZNK-mehU1mdZv08xdz8UjTl-QALmcEgobiRuoyQoeWt92afMYtuBX3kzvT_5m9Elkjhc4rHHpDiNf6wogszmS9Mx4lC0EsMEl5l8b_JJBG47jTyz98Y3PWcAO2ZyTcH8yNlpYBPFj7KaRficsGs8CRFBGw5iA1o72UB81ZJErA5bMTXTFHYajGnvTax4Tg7bu7Ejr1MiJgOyhk5XCSsK73VIMigK9tO-mfr_qz6iQYqzWNL-maMHsooY28hpMyVPueNui2" />
-          </div>
+        <div className="flex items-center gap-3">
+          <Bell className="w-5 h-5" strokeWidth={1.75} style={{ color: "rgba(251,246,232,0.7)" }} />
         </div>
       </nav>
 
       <main className="flex-grow container mx-auto px-4 pt-6 pb-32 max-w-lg">
         <div className="mb-8 px-2">
-          <div className="flex items-center gap-2 mb-1">
-            <MapPin className="text-tertiary w-4 h-4" />
-            <span className="font-label text-xs uppercase tracking-widest text-on-surface-variant font-bold">Brgy. San Roque</span>
-          </div>
-          <h2 className="font-headline text-3xl font-bold text-on-surface tracking-tight">Intake Report</h2>
-          <p className="text-on-surface-variant text-sm mt-2 leading-relaxed">Please capture the victim's request accurately. The system will automatically triage needs and location.</p>
+          <h2
+            className="font-display font-bold"
+            style={{ fontSize: 28, color: "var(--color-ink-soft)", letterSpacing: "-0.02em", lineHeight: 1.15 }}
+          >
+            add a report
+          </h2>
+          <p className="text-sm mt-2" style={{ color: "var(--color-ash)" }}>
+            capture what came in. paste from a chat thread, type what the sender said, or transcribe a voice note. Bisaya, Tagalog, English — all fine.
+          </p>
         </div>
 
         <form onSubmit={handleSubmit} className="space-y-6">

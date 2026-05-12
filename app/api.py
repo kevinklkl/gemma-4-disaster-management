@@ -474,6 +474,15 @@ def get_messages():
     return [row_to_message(r) for r in rows]
 
 
+@app.get("/api/messages/history")
+def get_history():
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT * FROM messages WHERE status = 'fulfilled' ORDER BY id DESC LIMIT 200"
+        ).fetchall()
+    return [row_to_message(r) for r in rows]
+
+
 SYNTHETIC_CSV = os.path.join(os.path.dirname(__file__), "..", "data", "synthetic_demand_messages.csv")
 
 

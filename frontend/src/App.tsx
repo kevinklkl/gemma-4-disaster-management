@@ -10,6 +10,8 @@ import { DonorView } from './pages/DonorView';
 import { IntakeChannelSelector } from './pages/IntakeChannelSelector';
 import { MobileIntake } from './pages/MobileIntake';
 import { Coverage } from './pages/Coverage';
+import { History } from './pages/History';
+import { Sagot } from './pages/Sagot';
 
 export default function App() {
   return (
@@ -18,6 +20,8 @@ export default function App() {
         <Route path="/" element={<Dashboard />} />
         <Route path="/inbox" element={<Inbox />} />
         <Route path="/coverage" element={<Coverage />} />
+        <Route path="/sagot" element={<Sagot />} />
+        <Route path="/history" element={<History />} />
         <Route path="/donor-view" element={<DonorView />} />
         <Route path="/intake" element={<IntakeChannelSelector />} />
         <Route path="/intake/type" element={<MobileIntake />} />

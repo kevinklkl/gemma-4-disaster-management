@@ -1,71 +1,156 @@
-@import url('https://fonts.googleapis.com/css2?family=Literata:opsz,wght@7..72,400..900&family=Nunito+Sans:ital,wght@0,200..1000;1,200..1000&display=swap');
+/* ============================================================
+   akbay — design system tokens
+   ------------------------------------------------------------
+   single source of typographic + chromatic truth.
+   thesis: "beside, not above." warm paper, deep sea-ink,
+   ember accent. lowercase by default. CAPS reserved for
+   CRITICAL / URGENT / OFFLINE only.
+   ============================================================ */
+@import url("https://fonts.googleapis.com/css2?family=Geist:wght@300..700&family=Geist+Mono:wght@400..600&display=swap");
 @import "tailwindcss";
 
 @theme {
-  --color-surface-container: #f0ece4;
-  --color-surface-bright: #faf6f0;
-  --color-primary-fixed-dim: #8ecf9e;
-  --color-on-tertiary-fixed-variant: #554020;
-  --color-inverse-primary: #8ecf9e;
-  --color-outline-variant: #c4c8bc;
-  --color-on-error: #ffffff;
-  --color-inverse-surface: #2e3230;
-  --color-secondary-fixed-dim: #d4ccbf;
-  --color-on-secondary-fixed-variant: #4a4538;
-  --color-on-primary-container: #d8f0de;
-  --color-on-background: #2e3230;
-  --color-on-secondary-fixed: #1e1a13;
-  --color-tertiary: #705c30;
-  --color-tertiary-fixed-dim: #dcc48e;
-  --color-on-primary: #ffffff;
-  --color-surface-dim: #dbd7cf;
-  --color-secondary-container: #f0e8db;
-  --color-surface-container-highest: #e4e0d8;
-  --color-surface-container-high: #eae6de;
-  --color-secondary: #6b6358;
-  --color-on-primary-fixed-variant: #2a6038;
-  --color-on-primary-fixed: #002110;
-  --color-tertiary-fixed: #f8e0a8;
-  --color-secondary-fixed: #f0e8db;
-  --color-surface-tint: #4a7c59;
-  --color-on-secondary: #ffffff;
-  --color-error-container: #ffdad8;
-  --color-on-tertiary: #ffffff;
-  --color-on-surface-variant: #4a4e4a;
-  --color-on-tertiary-container: #554020;
-  --color-surface-container-lowest: #ffffff;
-  --color-background: #faf6f0;
-  --color-tertiary-container: #c4a66a;
-  --color-primary-container: #78a886;
-  --color-on-tertiary-fixed: #221a05;
-  --color-on-error-container: #690005;
-  --color-surface: #faf6f0;
-  --color-primary-fixed: #c8e8d0;
-  --color-primary: #4a7c59;
-  --color-surface-variant: #e4e0d8;
-  --color-surface-container-low: #f5f1ea;
-  --color-on-surface: #2e3230;
-  --color-on-secondary-container: #5e5548;
-  --color-inverse-on-surface: #f5f0e8;
-  --color-error: #b83230;
-  --color-outline: #74796e;
+  /* ---- akbay palette (raw tokens) ---------------------------- */
+  --color-paper:        #F4ECD8;
+  --color-paper-warm:   #ECE1C7;
+  --color-paper-deep:   #E0D2B2;
+  --color-paper-edge:   #D4C49F;
 
-  --font-headline: "Literata", serif;
-  --font-display: "Literata", serif;
-  --font-body: "Nunito Sans", sans-serif;
-  --font-label: "Nunito Sans", sans-serif;
+  --color-dagat:        #0E3138;
+  --color-dagat-deep:   #082226;
+  --color-dagat-line:   #1B4A52;
+
+  --color-ink:          #1B2230;
+  --color-ink-soft:     #2E3949;
+  --color-ash:          #6A645A;
+  --color-smoke:        #A89E8C;
+  --color-bone:         #FBF6E8;
+
+  --color-araw:         #E08A1E;
+  --color-araw-hover:   #C57612;
+  --color-araw-soft:    #F4D49C;
+  --color-ember:        #A8501A;
+
+  --color-signal:       #D9622A;
+  --color-signal-soft:  #F5D4B8;
+  --color-tabang:       #A8302E;
+  --color-tabang-soft:  #F0CFCD;
+  --color-damay:        #386B4A;
+  --color-damay-soft:   #CCDDC9;
+  --color-cloud:        #DCD2BC;
+
+  /* ---- remap existing tailwind theme variables onto akbay ----
+     this keeps the bulk of existing classNames working without
+     a sweeping rewrite — `bg-primary`, `text-on-surface`, etc.
+     all cascade to the new palette. */
+  --color-primary:                   #E08A1E; /* araw — primary CTA */
+  --color-primary-container:         #F4D49C; /* araw-soft */
+  --color-primary-fixed:             #F4D49C;
+  --color-primary-fixed-dim:         #E08A1E;
+  --color-inverse-primary:           #E08A1E;
+  --color-on-primary:                #1B2230; /* ink reads on araw */
+  --color-on-primary-container:      #1B2230;
+  --color-on-primary-fixed:          #1B2230;
+  --color-on-primary-fixed-variant:  #A8501A; /* ember */
+
+  --color-secondary:                 #0E3138; /* dagat */
+  --color-secondary-container:       #E0D2B2; /* paper-deep */
+  --color-secondary-fixed:           #E0D2B2;
+  --color-secondary-fixed-dim:       #D4C49F;
+  --color-on-secondary:              #FBF6E8;
+  --color-on-secondary-container:    #1B2230;
+  --color-on-secondary-fixed:        #1B2230;
+  --color-on-secondary-fixed-variant:#2E3949;
+
+  --color-tertiary:                  #D9622A; /* signal */
+  --color-tertiary-container:        #F5D4B8; /* signal-soft */
+  --color-tertiary-fixed:            #F5D4B8;
+  --color-tertiary-fixed-dim:        #D9622A;
+  --color-on-tertiary:               #FBF6E8;
+  --color-on-tertiary-container:     #1B2230;
+  --color-on-tertiary-fixed:         #1B2230;
+  --color-on-tertiary-fixed-variant: #A8501A;
+
+  --color-error:                     #A8302E; /* tabang — CRITICAL */
+  --color-error-container:           #F0CFCD;
+  --color-on-error:                  #FBF6E8;
+  --color-on-error-container:        #1B2230;
+
+  --color-background:                #F4ECD8; /* paper */
+  --color-on-background:             #1B2230;
+
+  --color-surface:                   #F4ECD8;
+  --color-surface-tint:              #E08A1E;
+  --color-surface-bright:            #ECE1C7; /* paper-warm — card */
+  --color-surface-dim:               #E0D2B2;
+  --color-surface-variant:           #ECE1C7;
+  --color-surface-container-lowest:  #F4ECD8;
+  --color-surface-container-low:     #F4ECD8;
+  --color-surface-container:         #ECE1C7;
+  --color-surface-container-high:    #E0D2B2;
+  --color-surface-container-highest: #D4C49F;
+
+  --color-on-surface:                #1B2230;
+  --color-on-surface-variant:        #6A645A; /* ash */
+  --color-inverse-surface:           #0E3138;
+  --color-inverse-on-surface:        #FBF6E8;
+
+  --color-outline:                   #6A645A;
+  --color-outline-variant:           #D4C49F; /* paper-edge */
+
+  /* ---- typography (single-family system — no serif) ---------- */
+  --font-headline: "Geist", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-display:  "Geist", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-body:     "Geist", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-label:    "Geist", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono:     "Geist Mono", "JetBrains Mono", "Courier New", monospace;
+}
+
+:root {
+  /* motion */
+  --ease-out:   cubic-bezier(0.22, 0.61, 0.36, 1);
+  --ease-in:    cubic-bezier(0.45, 0, 0.55, 1);
+  --ease-pulse: cubic-bezier(0.4, 0, 0.6, 1);
+  --dur-fast:   120ms;
+  --dur-base:   200ms;
+  --dur-slow:   400ms;
+
+  /* elevation — dagat-tinted, never neutral gray */
+  --shadow-1: 0 1px 2px rgba(14, 49, 56, 0.06);
+  --shadow-2: 0 2px 6px rgba(14, 49, 56, 0.08), 0 1px 2px rgba(14, 49, 56, 0.04);
+  --shadow-3: 0 8px 24px rgba(14, 49, 56, 0.10), 0 2px 6px rgba(14, 49, 56, 0.06);
 }
 
 body {
-    font-family: var(--font-body);
-    background-color: var(--color-background);
-    color: var(--color-on-background);
-    -webkit-tap-highlight-color: transparent;
+  font-family: var(--font-body);
+  background-color: var(--color-paper);
+  color: var(--color-ink);
+  -webkit-tap-highlight-color: transparent;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
 }
-h1, h2, h3, .font-headline { font-family: var(--font-headline); }
-.custom-shadow { box-shadow: 0 4px 20px rgba(46, 50, 48, 0.06); }
 
-/* Custom scrollbar */
-::-webkit-scrollbar { width: 6px; }
-::-webkit-scrollbar-track { background: var(--color-surface-container); }
-::-webkit-scrollbar-thumb { background: var(--color-outline-variant); border-radius: 10px; }
+h1, h2, h3, .font-headline, .font-display {
+  font-family: var(--font-display);
+  color: var(--color-ink-soft);
+  letter-spacing: -0.015em;
+}
+
+/* the three reserved CAPS contexts: CRITICAL / URGENT / OFFLINE.
+   any fourth context breaks the brand. */
+.ak-caps {
+  font-family: var(--font-body);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  line-height: 1;
+}
+
+.custom-shadow { box-shadow: var(--shadow-1); }
+
+::selection { background: var(--color-araw-soft); color: var(--color-ink); }
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--color-paper-edge); border-radius: 999px; }
+::-webkit-scrollbar-thumb:hover { background: var(--color-smoke); }
