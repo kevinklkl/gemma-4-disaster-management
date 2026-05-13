@@ -777,6 +777,14 @@ async def node_status_me(request: Request):
     return {"registered": registered, "isHost": False}
 
 
+@app.delete("/api/nodes/me")
+async def unregister_node_me(request: Request):
+    ip = request.headers.get("x-forwarded-for") or request.client.host
+    url = f"http://{ip}:11434/api/generate"
+    removed = node_pool.unregister(url)
+    return {"ok": removed, "nodes": node_pool.list_nodes()}
+
+
 @app.get("/api/nodes/join-script")
 async def download_join_script(request: Request, name: str = ""):
     host_base = f"http://{MDNS_NAME}:{MDNS_PORT}"
@@ -792,16 +800,17 @@ async def download_join_script(request: Request, name: str = ""):
         script = (
             "@echo off\r\n"
             "title Gemma Node — Setup\r\n"
-            "echo Starting Ollama on the network...\r\n"
-            'start "" cmd /k "set OLLAMA_HOST=0.0.0.0 && ollama serve"\r\n'
+            "echo Starting Ollama...\r\n"
+            'start /MIN "Gemma Node" cmd /k "set OLLAMA_HOST=0.0.0.0 && ollama serve"\r\n'
             "timeout /t 4 /nobreak > nul\r\n"
             "echo Connecting to host...\r\n"
             f'curl -s -X POST {host_base}/api/nodes'
             f' -H "Content-Type: application/json"'
             f' -d "{{\\\"name\\\":\\\"{name_val}\\\"}}"\r\n'
             "echo.\r\n"
-            "echo Done! Keep the other window open while sharing this computer.\r\n"
-            "pause\r\n"
+            "echo Done! Ollama is running minimized in your taskbar.\r\n"
+            "echo To stop sharing, close the Gemma Node window in the taskbar.\r\n"
+            "timeout /t 5 /nobreak > nul\r\n"
         )
         filename = "join-node.bat"
     else:

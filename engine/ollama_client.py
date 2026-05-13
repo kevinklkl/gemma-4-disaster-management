@@ -148,6 +148,13 @@ class NodePool:
             with self._cv:
                 self._cv.notify_all()
 
+    def unregister(self, url: str) -> bool:
+        with self._cv:
+            before = len(self._nodes)
+            self._nodes = [n for n in self._nodes if n.url != url]
+            self._cv.notify_all()
+            return len(self._nodes) < before
+
     def list_nodes(self) -> list[dict]:
         with self._cv:
             return [

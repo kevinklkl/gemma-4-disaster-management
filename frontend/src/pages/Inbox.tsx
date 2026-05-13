@@ -559,6 +559,24 @@ export function Inbox() {
                     you're the host — already in pool
                   </p>
                 )}
+                {joinStatus === "joined" && (
+                  <div className="flex items-center justify-between pt-2 mt-2 border-t border-outline-variant/20">
+                    <p className="text-xs text-on-surface-variant">you're sharing this computer</p>
+                    <button
+                      onClick={() => {
+                        fetch("/api/nodes/me", { method: "DELETE" })
+                          .then(r => r.json())
+                          .then(data => {
+                            setJoinStatus("idle");
+                            setNodes(data.nodes ?? []);
+                          })
+                          .catch(() => {});
+                      }}
+                      className="flex items-center gap-1 px-3 py-1.5 bg-error/10 text-error rounded-lg text-xs font-bold hover:bg-error/20 transition-all">
+                      Leave pool
+                    </button>
+                  </div>
+                )}
                 {joinStatus !== "joined" && joinStatus !== "host" && (
                   <div className="flex items-center justify-between pt-2 mt-2 border-t border-outline-variant/20">
                     <p className="text-xs text-on-surface-variant">want to contribute your computer?</p>
