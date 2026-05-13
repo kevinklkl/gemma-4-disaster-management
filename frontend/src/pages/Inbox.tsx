@@ -39,9 +39,18 @@ type NodeInfo = {
   jobs_done: number;
 };
 
-function getElapsedS(startedAt?: string): string {
-  if (!startedAt) return "0.0";
-  return ((Date.now() - new Date(startedAt).getTime()) / 1000).toFixed(1);
+function ElapsedTimer({ startedAt }: { startedAt?: string }) {
+  const [elapsed, setElapsed] = useState(0);
+  useEffect(() => {
+    if (!startedAt) return;
+    const id = setInterval(
+      () => setElapsed(Math.floor((Date.now() - new Date(startedAt).getTime()) / 1000)),
+      100
+    );
+    return () => clearInterval(id);
+  }, [startedAt]);
+  if (!startedAt) return <span>0s</span>;
+  return <span>{elapsed}s</span>;
 }
 
 function formatDuration(ms?: number): string | null {
@@ -51,8 +60,11 @@ function formatDuration(ms?: number): string | null {
 
 export function Inbox() {
   const [messages, setMessages] = useState<Message[]>([]);
+  const [inboxTotal, setInboxTotal] = useState(0);
+  const [inboxOffset, setInboxOffset] = useState(0);
+  const PAGE_SIZE = 50;
+  const [stats, setStats] = useState({ processed: 0, inQueue: 0, failed: 0 });
   const [, setProcessingIds] = useState<Set<string>>(new Set());
-  const [, setTick] = useState(0);
   const processingRefs = useRef<Set<string>>(new Set());
   const wsRef = useRef<WebSocket | null>(null);
   const [joinDismissed, setJoinDismissed] = useState(false);
@@ -135,14 +147,6 @@ export function Inbox() {
     return () => clearInterval(id);
   }, []);
 
-  // Re-render every 100ms to tick elapsed timers while any message is processing
-  useEffect(() => {
-    const hasProcessing = messages.some(m => m.status === "processing");
-    if (!hasProcessing) return;
-    const id = setInterval(() => setTick(t => t + 1), 100);
-    return () => clearInterval(id);
-  }, [messages]);
-
   // WebSocket for live processing_started / processing_done events
   useEffect(() => {
     let cancelled = false;
@@ -168,12 +172,14 @@ export function Inbox() {
           ));
           processingRefs.current.delete(msg.msgId);
           setProcessingIds(prev => { const n = new Set(prev); n.delete(msg.msgId); return n; });
+          fetch("/api/stats").then(r => r.json()).then(setStats).catch(() => {});
         } else if (msg.type === "processing_failed") {
           setMessages(prev => prev.map(m =>
             m.id === msg.msgId ? { ...m, status: "failed" } : m
           ));
           processingRefs.current.delete(msg.msgId);
           setProcessingIds(prev => { const n = new Set(prev); n.delete(msg.msgId); return n; });
+          fetch("/api/stats").then(r => r.json()).then(setStats).catch(() => {});
         }
       };
 
@@ -184,12 +190,35 @@ export function Inbox() {
     return () => { cancelled = true; wsRef.current?.close(); };
   }, []);
 
-  useEffect(() => {
-    fetch("/api/messages")
+  const fetchStats = () => {
+    fetch("/api/stats")
       .then(r => r.json())
-      .then((data: Message[]) => setMessages(data))
+      .then(setStats)
       .catch(console.error);
+  };
+
+  useEffect(() => {
+    fetch(`/api/messages?limit=${PAGE_SIZE}&offset=0`)
+      .then(r => r.json())
+      .then((data: { messages: Message[]; total: number }) => {
+        setMessages(data.messages);
+        setInboxTotal(data.total);
+        setInboxOffset(data.messages.length);
+      })
+      .catch(console.error);
+    fetchStats();
   }, []);
+
+  const loadOlder = () => {
+    fetch(`/api/messages?limit=${PAGE_SIZE}&offset=${inboxOffset}`)
+      .then(r => r.json())
+      .then((data: { messages: Message[]; total: number }) => {
+        setMessages(prev => [...prev, ...data.messages]);
+        setInboxTotal(data.total);
+        setInboxOffset(prev => prev + data.messages.length);
+      })
+      .catch(console.error);
+  };
 
   const triggerProcess = useCallback((msg: Message) => {
     if (processingRefs.current.has(msg.id)) return;
@@ -232,7 +261,9 @@ export function Inbox() {
 
   const handleRetryAll = () => {
     setMessages(prev => prev.map(m => m.status === "failed" ? { ...m, status: "processing" } : m));
-    fetch("/api/retry-failed", { method: "POST" }).catch(console.error);
+    fetch("/api/retry-failed", { method: "POST" })
+      .then(() => fetch("/api/stats").then(r => r.json()).then(setStats))
+      .catch(console.error);
   };
 
   const handleUpdateField = (id: string, field: string, value: any) => {
@@ -302,11 +333,6 @@ export function Inbox() {
     }
   };
 
-  const stats = {
-    processed: messages.filter(m => m.status === "processed").length,
-    inQueue: messages.filter(m => m.status === "needs_processing" || m.status === "processing").length,
-    failed: messages.filter(m => m.status === "failed").length,
-  };
 
   return (
     <div className="h-screen bg-surface-container-low font-body text-on-surface flex flex-col overflow-hidden">
@@ -690,7 +716,7 @@ export function Inbox() {
                           style={{ background: "var(--color-damay-soft)", color: "var(--color-damay)" }}
                         >
                           <Timer className="w-3 h-3" strokeWidth={2} />
-                          {getElapsedS(message.processingStartedAt)}s
+                          <ElapsedTimer startedAt={message.processingStartedAt} />
                         </span>
                       </div>
                     )}
@@ -843,11 +869,16 @@ export function Inbox() {
               ))}
             </div>
 
-            <div className="flex justify-center pt-4">
-              <button className="py-3 px-6 border-2 border-dashed border-outline-variant/30 text-on-surface-variant font-bold text-sm rounded-xl hover:bg-surface-container transition-colors">
-                load older messages
-              </button>
-            </div>
+            {messages.length < inboxTotal && (
+              <div className="flex justify-center pt-4">
+                <button
+                  onClick={loadOlder}
+                  className="py-3 px-6 border-2 border-dashed border-outline-variant/30 text-on-surface-variant font-bold text-sm rounded-xl hover:bg-surface-container transition-colors"
+                >
+                  load older messages ({inboxTotal - messages.length} remaining)
+                </button>
+              </div>
+            )}
           </div>
         </main>
       </div>

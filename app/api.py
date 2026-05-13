@@ -86,6 +86,8 @@ def init_db():
         ]:
             if col not in existing:
                 conn.execute(f"ALTER TABLE messages ADD COLUMN {col} {definition}")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_messages_status ON messages(status)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_messages_received_at ON messages(received_at)")
 
 
 init_db()
@@ -466,12 +468,30 @@ def get_inbox():
 
 
 @app.get("/api/messages")
-def get_messages():
+def get_messages(limit: int = 50, offset: int = 0):
+    with get_db() as conn:
+        total = conn.execute(
+            "SELECT COUNT(*) FROM messages WHERE status != 'fulfilled'"
+        ).fetchone()[0]
+        rows = conn.execute(
+            "SELECT * FROM messages WHERE status != 'fulfilled' ORDER BY id DESC LIMIT ? OFFSET ?",
+            (limit, offset)
+        ).fetchall()
+    return {"messages": [row_to_message(r) for r in rows], "total": total, "offset": offset, "limit": limit}
+
+
+@app.get("/api/stats")
+def get_stats():
     with get_db() as conn:
         rows = conn.execute(
-            "SELECT * FROM messages WHERE status != 'fulfilled' ORDER BY id DESC"
+            "SELECT status, COUNT(*) as cnt FROM messages GROUP BY status"
         ).fetchall()
-    return [row_to_message(r) for r in rows]
+    counts = {r["status"]: r["cnt"] for r in rows}
+    return {
+        "processed": counts.get("processed", 0),
+        "inQueue": counts.get("needs_processing", 0) + counts.get("processing", 0),
+        "failed": counts.get("failed", 0),
+    }
 
 
 @app.get("/api/messages/history")

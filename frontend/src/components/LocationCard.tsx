@@ -1,3 +1,4 @@
+import { memo } from "react";
 import {
   Users, CheckCircle2, Clock, MapPin, Send,
   Smartphone, Mic, UserCircle, MessageSquare
@@ -78,7 +79,7 @@ function computeProgress(items: AggregatedItem[]): { packed: number; total: numb
   return { packed, total, pct: total > 0 ? (packed / total) * 100 : 0, hasUnknown };
 }
 
-export function LocationCard({ card, now, onToggleItemPacked, onUpdateItemPackedQty, onDispatch }: LocationCardProps) {
+export const LocationCard = memo(function LocationCard({ card, now, onToggleItemPacked, onUpdateItemPackedQty, onDispatch }: LocationCardProps) {
   const progress = computeProgress(card.items);
   const allPacked = card.items.every(i => i.totalQty != null && i.totalPacked >= i.totalQty);
   const somePacked = card.items.some(i => i.totalPacked > 0);
@@ -309,4 +310,4 @@ export function LocationCard({ card, now, onToggleItemPacked, onUpdateItemPacked
       </div>
     </div>
   );
-}
+});

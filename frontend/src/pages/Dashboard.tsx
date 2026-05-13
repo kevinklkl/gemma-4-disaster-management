@@ -166,9 +166,9 @@ export function Dashboard() {
   };
 
   const fetchMessages = () => {
-    fetch("/api/messages")
+    fetch("/api/messages?limit=1000")
       .then(r => r.json())
-      .then((msgs: ApiMessage[]) => setMessages(msgs))
+      .then((data: { messages: ApiMessage[] }) => setMessages(data.messages))
       .catch(console.error);
   };
 
