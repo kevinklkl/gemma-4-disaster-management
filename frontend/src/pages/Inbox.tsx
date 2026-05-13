@@ -451,7 +451,7 @@ export function Inbox() {
                     className="flex-1 py-3 bg-surface-container text-on-surface rounded-xl text-sm font-bold hover:bg-surface-container-high transition-all">
                     ← Back
                   </button>
-                  <button onClick={() => setJoinStep(3)}
+                  <button onClick={() => { setJoinStep(3); handleJoin(); }}
                     className="flex-[2] py-3 bg-primary text-on-primary rounded-xl text-sm font-bold hover:brightness-110 transition-all flex items-center justify-center gap-2">
                     I've run it <ArrowRight className="w-4 h-4" />
                   </button>
