@@ -855,6 +855,9 @@ async def download_join_script(request: Request, name: str = ""):
             'start "" /MIN "%~f0" run\r\n'
             "exit /b\r\n"
             ":run\r\n"
+            'echo [1/4] Opening firewall for Ollama...\r\n'
+            "netsh advfirewall firewall add rule name=\"Ollama Node\" dir=in action=allow protocol=TCP localport=11434 > nul 2>&1\r\n"
+            'echo [2/4] Starting Ollama...\r\n'
             'start /MIN "Akbay Node" cmd /k "set OLLAMA_HOST=0.0.0.0 && ollama serve"\r\n'
             "set tries=0\r\n"
             ":wait\r\n"
@@ -864,9 +867,14 @@ async def download_join_script(request: Request, name: str = ""):
             "set /a tries=tries+1\r\n"
             "if %tries% lss 15 goto wait\r\n"
             ":register\r\n"
-            f'curl -s -X POST {host_base}/api/nodes'
+            'echo [3/4] Connecting to host...\r\n'
+            f'curl -X POST {host_base}/api/nodes'
             f' -H "Content-Type: application/json"'
             f' -d "{{\\\"name\\\":\\\"{name_val}\\\"}}"\r\n'
+            'echo.\r\n'
+            'echo [4/4] Done! If you see "transferring" above, the AI model is being\r\n'
+            'echo       copied to this device in the background. Keep this window open.\r\n'
+            "pause\r\n"
         )
         filename = "join-node.bat"
     else:
