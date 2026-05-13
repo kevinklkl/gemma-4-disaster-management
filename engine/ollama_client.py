@@ -1,6 +1,6 @@
+import json
 import os
 import pathlib
-import re
 import threading
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -182,47 +182,62 @@ def _get_ollama_models_dir() -> "pathlib.Path | None":
     return None
 
 
+def _find_model_manifest(models_dir: pathlib.Path, model_name: str) -> "pathlib.Path | None":
+    name, tag = (model_name.split(":", 1) + ["latest"])[:2]
+    base = models_dir / "manifests" / "registry.ollama.ai"
+    for candidate in [
+        base / "library" / name / tag,
+        base / name / tag,
+        base / "library" / name / "latest",
+        base / name / "latest",
+    ]:
+        if candidate.exists():
+            return candidate
+    return None
+
+
 def transfer_model_to_node(node_base_url: str) -> bool:
     """Copy MODEL_NAME from the local Ollama to a remote Ollama node over LAN.
 
-    Flow:
-      1. Fetch the modelfile from local Ollama (/api/show).
-      2. Parse every @sha256:… blob reference from the modelfile.
-      3. Upload each blob to the remote node via POST /api/blobs/sha256:{digest},
-         skipping any the node already has (HEAD check).
-      4. Call POST /api/create on the remote with the same modelfile so Ollama
-         registers the model name → blob mapping.
+    Reads the OCI manifest from disk to find all blob digests (works for both
+    pulled models and local GGUF imports), uploads each blob to the remote node,
+    then calls /api/create to register the model name.
     """
     print(f"[model-transfer] starting → {node_base_url}")
-
-    try:
-        show = requests.post(
-            "http://localhost:11434/api/show",
-            json={"model": MODEL_NAME},
-            timeout=10,
-        )
-        show.raise_for_status()
-        modelfile: str = show.json().get("modelfile", "")
-    except Exception as e:
-        print(f"[model-transfer] cannot read local model info: {e}")
-        return False
-
-    digests = re.findall(r"@(sha256:[a-f0-9]+)", modelfile)
-    if not digests:
-        print("[model-transfer] no @sha256 blobs in modelfile — model may not be a local GGUF import")
-        return False
 
     models_dir = _get_ollama_models_dir()
     if not models_dir:
         print("[model-transfer] cannot locate local ~/.ollama/models")
         return False
 
+    manifest_path = _find_model_manifest(models_dir, MODEL_NAME)
+    if not manifest_path:
+        print(f"[model-transfer] cannot find manifest for {MODEL_NAME}")
+        return False
+
+    with open(manifest_path) as f:
+        manifest = json.load(f)
+
     blobs_dir = models_dir / "blobs"
 
-    for digest in digests:
+    # Collect config + all layers from the manifest
+    all_layers = []
+    if "config" in manifest:
+        all_layers.append(manifest["config"])
+    all_layers.extend(manifest.get("layers", []))
+
+    # The model weights layer — used to build the FROM line for /api/create
+    model_blob_digest = next(
+        (l["digest"] for l in manifest.get("layers", [])
+         if l.get("mediaType") == "application/vnd.ollama.image.model"),
+        None,
+    )
+
+    for layer in all_layers:
+        digest = layer["digest"]
         blob_path = blobs_dir / digest.replace(":", "-")  # sha256:abc → sha256-abc
         if not blob_path.exists():
-            print(f"[model-transfer] blob not found locally: {blob_path}")
+            print(f"[model-transfer] blob not found: {blob_path}")
             return False
 
         try:
@@ -241,7 +256,7 @@ def transfer_model_to_node(node_base_url: str) -> bool:
                     f"{node_base_url}/api/blobs/{digest}",
                     data=f,
                     headers={"Content-Type": "application/octet-stream"},
-                    timeout=1800,  # 30 min — model weights are several GB
+                    timeout=1800,
                 )
             if not up.ok:
                 print(f"[model-transfer] blob upload failed: {up.text}")
@@ -251,6 +266,33 @@ def transfer_model_to_node(node_base_url: str) -> bool:
             return False
 
         print(f"[model-transfer] {digest[:20]}… done")
+
+    # Build modelfile: use blob reference for FROM so the remote doesn't need
+    # to resolve any external model name, then carry over template/params/system.
+    try:
+        show = requests.post(
+            "http://localhost:11434/api/show",
+            json={"model": MODEL_NAME},
+            timeout=10,
+        )
+        show.raise_for_status()
+        show_data = show.json()
+    except Exception as e:
+        print(f"[model-transfer] /api/show failed: {e}")
+        show_data = {}
+
+    if model_blob_digest:
+        lines = [f"FROM @{model_blob_digest}"]
+        if show_data.get("template"):
+            lines.append(f'TEMPLATE """{show_data["template"]}"""')
+        if show_data.get("system"):
+            lines.append(f'SYSTEM """{show_data["system"]}"""')
+        for param_line in (show_data.get("parameters") or "").strip().splitlines():
+            if param_line.strip():
+                lines.append(f"PARAMETER {param_line.strip()}")
+        modelfile = "\n".join(lines)
+    else:
+        modelfile = show_data.get("modelfile", f"FROM {MODEL_NAME}")
 
     try:
         create = requests.post(
