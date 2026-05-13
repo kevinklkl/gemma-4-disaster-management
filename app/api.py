@@ -3,13 +3,15 @@ import csv
 import ipaddress
 import json
 import os
+import socket
 import sqlite3
 import time
 import requests
+from zeroconf import ServiceInfo, Zeroconf
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from typing import Any, List, Optional
-from fastapi import FastAPI, Request, HTTPException, BackgroundTasks, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Request, HTTPException, BackgroundTasks, WebSocket, WebSocketDisconnect, Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
@@ -93,12 +95,29 @@ def init_db():
 init_db()
 
 _event_loop = None
+_zeroconf: Zeroconf | None = None
+_zeroconf_info: ServiceInfo | None = None
+
+MDNS_NAME = "gemma-host.local"
+MDNS_PORT = 8000
+
+
+def _get_local_ip() -> str:
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
+    except Exception:
+        return "127.0.0.1"
 
 
 @app.on_event("startup")
-async def _store_loop():
-    global _event_loop
+async def _startup():
+    global _event_loop, _zeroconf, _zeroconf_info
     _event_loop = asyncio.get_event_loop()
+
     # Requeue any messages left as needs_processing from before a server restart
     with get_db() as conn:
         stuck = conn.execute(
@@ -108,6 +127,27 @@ async def _store_loop():
         print(f"[startup] requeueing {len(stuck)} stuck messages")
         import threading
         threading.Thread(target=_run_gemma_bg, args=(stuck[0]["id"], stuck[0]["message"]), daemon=True).start()
+
+    # Register mDNS so workers can reach this machine as gemma-host.local
+    local_ip = _get_local_ip()
+    _zeroconf = Zeroconf()
+    _zeroconf_info = ServiceInfo(
+        "_http._tcp.local.",
+        "GemmaHost._http._tcp.local.",
+        addresses=[socket.inet_aton(local_ip)],
+        port=MDNS_PORT,
+        properties={},
+        server=f"{MDNS_NAME}.",
+    )
+    await asyncio.to_thread(_zeroconf.register_service, _zeroconf_info)
+    print(f"[mdns] {MDNS_NAME} → {local_ip}:{MDNS_PORT}")
+
+
+@app.on_event("shutdown")
+async def _shutdown():
+    if _zeroconf and _zeroconf_info:
+        await asyncio.to_thread(_zeroconf.unregister_service, _zeroconf_info)
+        await asyncio.to_thread(_zeroconf.close)
 
 
 def _broadcast_sync(payload: dict):
@@ -735,6 +775,60 @@ async def node_status_me(request: Request):
     url = f"http://{ip}:11434/api/generate"
     registered = any(n["url"] == url for n in node_pool.list_nodes())
     return {"registered": registered, "isHost": False}
+
+
+@app.get("/api/nodes/join-script")
+async def download_join_script(request: Request, name: str = ""):
+    host_base = f"http://{MDNS_NAME}:{MDNS_PORT}"
+
+    safe_name = (
+        name.replace('"', "").replace("'", "").replace("\\", "")
+        .replace("`", "").replace("\n", "").replace("\r", "").strip()[:64]
+    )
+
+    ua = request.headers.get("user-agent", "")
+    if "Windows" in ua:
+        name_val = safe_name if safe_name else "%COMPUTERNAME%"
+        script = (
+            "@echo off\r\n"
+            "title Gemma Node — Setup\r\n"
+            "echo Starting Ollama on the network...\r\n"
+            'start "" cmd /k "set OLLAMA_HOST=0.0.0.0 && ollama serve"\r\n'
+            "timeout /t 4 /nobreak > nul\r\n"
+            "echo Connecting to host...\r\n"
+            f'curl -s -X POST {host_base}/api/nodes'
+            f' -H "Content-Type: application/json"'
+            f' -d "{{\\\"name\\\":\\\"{name_val}\\\"}}"\r\n'
+            "echo.\r\n"
+            "echo Done! Keep the other window open while sharing this computer.\r\n"
+            "pause\r\n"
+        )
+        filename = "join-node.bat"
+    else:
+        node_name = safe_name if safe_name else "$(hostname)"
+        script = (
+            "#!/bin/bash\n"
+            'echo "Starting Ollama on the network..."\n'
+            "OLLAMA_HOST=0.0.0.0 ollama serve &\n"
+            "OLLAMA_PID=$!\n"
+            "sleep 4\n"
+            'echo "Connecting to host..."\n'
+            f'NODE_NAME="{node_name}"\n'
+            f'curl -s -X POST {host_base}/api/nodes \\\n'
+            '  -H "Content-Type: application/json" \\\n'
+            '  -d "{\\"name\\":\\"$NODE_NAME\\"}"\n'
+            'echo ""\n'
+            'echo "Done! Keep this window open while sharing this computer."\n'
+            'echo "Press Ctrl+C to stop contributing."\n'
+            "wait $OLLAMA_PID\n"
+        )
+        filename = "join-node.sh"
+
+    return Response(
+        content=script,
+        media_type="application/octet-stream",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @app.post("/api/retry-failed")

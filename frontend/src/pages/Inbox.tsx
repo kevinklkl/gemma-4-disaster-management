@@ -74,21 +74,22 @@ export function Inbox() {
   const [joinStatus, setJoinStatus] = useState<"idle" | "joining" | "joined" | "host" | "error">("idle");
   const [joinError, setJoinError] = useState("");
   const [joinStep, setJoinStep] = useState<0 | 1 | 2 | 3>(0);
-  const [copied, setCopied] = useState(false);
   const [joinName, setJoinName] = useState("");
+  const [cmdCopied, setCmdCopied] = useState(false);
   const [nodes, setNodes] = useState<NodeInfo[]>([]);
 
   const ua = navigator.userAgent;
   const os: "windows" | "mac" = ua.includes("Windows") ? "windows" : "mac";
-  const ollamaCommand = os === "windows"
-    ? "set OLLAMA_HOST=0.0.0.0 && ollama serve"
-    : "OLLAMA_HOST=0.0.0.0 ollama serve";
-  const pasteKey = os === "windows" ? "Ctrl + V" : "⌘ + V";
 
-  const handleCopy = () => {
-    navigator.clipboard.writeText(ollamaCommand).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
+  const scriptPath = joinName.trim()
+    ? `/api/nodes/join-script?name=${encodeURIComponent(joinName.trim())}`
+    : "/api/nodes/join-script";
+  const curlCommand = `curl -fsSL "${window.location.origin}${scriptPath}" | bash`;
+
+  const handleCopyCurl = () => {
+    navigator.clipboard.writeText(curlCommand).then(() => {
+      setCmdCopied(true);
+      setTimeout(() => setCmdCopied(false), 2000);
     });
   };
 
@@ -136,6 +137,23 @@ export function Inbox() {
       })
       .catch(() => {});
   }, []);
+
+  // Auto-detect registration after user runs the join script
+  useEffect(() => {
+    if (joinStep !== 3) return;
+    const id = setInterval(() => {
+      fetch("/api/nodes/me")
+        .then(r => r.json())
+        .then(data => {
+          if (data.registered && !data.isHost) {
+            setJoinStatus("joined");
+            setJoinStep(0);
+          }
+        })
+        .catch(() => {});
+    }, 2000);
+    return () => clearInterval(id);
+  }, [joinStep]);
 
   // Poll node pool status always
   useEffect(() => {
@@ -360,76 +378,74 @@ export function Inbox() {
               </button>
             </div>
 
-            {/* Step 1 — Open terminal */}
+            {/* Step 1 — Name */}
             {joinStep === 1 && (
-              <div className="space-y-4">
+              <div className="space-y-5">
                 <div>
-                  <h2 className="text-lg font-headline font-bold text-on-surface">Open a terminal</h2>
-                  <p className="text-sm text-on-surface-variant mt-1">A terminal lets you type commands to your computer.</p>
+                  <h2 className="text-lg font-headline font-bold text-on-surface">Name this computer</h2>
+                  <p className="text-sm text-on-surface-variant mt-1">So you can tell it apart in the pool. Optional.</p>
                 </div>
+                <input
+                  type="text"
+                  value={joinName}
+                  onChange={e => setJoinName(e.target.value)}
+                  placeholder={os === "mac" ? "Jacob's Mac" : "Jacob's PC"}
+                  className="w-full bg-surface-container-high rounded-xl px-3 py-2.5 text-sm border-none ring-1 ring-outline-variant/30 focus:ring-primary outline-none text-on-surface"
+                />
                 {os === "windows" ? (
-                  <div className="space-y-3">
-                    <div className="flex items-center gap-2">
-                      <kbd className="bg-surface-container-high border border-outline-variant rounded-lg px-3 py-2 text-sm font-bold text-on-surface shadow-sm">⊞ Win</kbd>
-                      <span className="text-on-surface-variant font-bold">+</span>
-                      <kbd className="bg-surface-container-high border border-outline-variant rounded-lg px-3 py-2 text-sm font-bold text-on-surface shadow-sm">R</kbd>
-                    </div>
-                    <p className="text-sm text-on-surface">A small box will appear at the bottom of your screen.</p>
-                    <div className="bg-surface-container rounded-xl p-3 flex items-center gap-3">
-                      <span className="text-sm text-on-surface-variant">Type</span>
-                      <code className="bg-surface-container-high rounded px-2 py-1 text-sm font-mono font-bold text-on-surface">cmd</code>
-                      <span className="text-sm text-on-surface-variant">then press Enter</span>
-                    </div>
-                    <p className="text-xs text-on-surface-variant">A black window opens — that's your terminal. ✓</p>
-                  </div>
+                  <a
+                    href={scriptPath}
+                    download
+                    onClick={() => setTimeout(() => setJoinStep(2), 600)}
+                    className="w-full py-3.5 bg-primary text-on-primary rounded-xl text-sm font-bold hover:brightness-110 transition-all flex items-center justify-center gap-2"
+                  >
+                    Download setup file <ArrowRight className="w-4 h-4" />
+                  </a>
                 ) : (
-                  <div className="space-y-3">
-                    <div className="flex items-center gap-2">
-                      <kbd className="bg-surface-container-high border border-outline-variant rounded-lg px-3 py-2 text-sm font-bold text-on-surface shadow-sm">⌘</kbd>
-                      <span className="text-on-surface-variant font-bold">+</span>
-                      <kbd className="bg-surface-container-high border border-outline-variant rounded-lg px-3 py-2 text-sm font-bold text-on-surface shadow-sm">Space</kbd>
-                    </div>
-                    <p className="text-sm text-on-surface">Spotlight search opens at the top of your screen.</p>
-                    <div className="bg-surface-container rounded-xl p-3 flex items-center gap-3">
-                      <span className="text-sm text-on-surface-variant">Type</span>
-                      <code className="bg-surface-container-high rounded px-2 py-1 text-sm font-mono font-bold text-on-surface">Terminal</code>
-                      <span className="text-sm text-on-surface-variant">then press Enter</span>
-                    </div>
-                    <p className="text-xs text-on-surface-variant">A white window opens — that's your terminal. ✓</p>
-                  </div>
+                  <button onClick={() => setJoinStep(2)}
+                    className="w-full py-3.5 bg-primary text-on-primary rounded-xl text-sm font-bold hover:brightness-110 transition-all flex items-center justify-center gap-2">
+                    Next <ArrowRight className="w-4 h-4" />
+                  </button>
                 )}
-                <button onClick={() => setJoinStep(2)}
-                  className="w-full py-3 bg-primary text-on-primary rounded-xl text-sm font-bold hover:brightness-110 transition-all flex items-center justify-center gap-2">
-                  I've opened it <ArrowRight className="w-4 h-4" />
-                </button>
               </div>
             )}
 
-            {/* Step 2 — Run command */}
+            {/* Step 2 — Run */}
             {joinStep === 2 && (
-              <div className="space-y-4">
-                <div>
-                  <h2 className="text-lg font-headline font-bold text-on-surface">Run this command</h2>
-                  <p className="text-sm text-on-surface-variant mt-1">This tells Ollama to accept connections from the network.</p>
-                </div>
-                <div className="space-y-3">
-                  <div className="bg-surface-container-high rounded-xl p-3 flex items-center gap-2">
-                    <code className="text-xs font-mono text-on-surface flex-1 break-all leading-relaxed">{ollamaCommand}</code>
-                    <button onClick={handleCopy}
-                      className="shrink-0 flex items-center gap-1 px-2 py-1.5 bg-primary/10 text-primary rounded-lg text-xs font-bold hover:bg-primary/20 transition-all">
-                      {copied ? <><CheckCircle2 className="w-3.5 h-3.5" /> Copied!</> : "Copy"}
-                    </button>
-                  </div>
-                  <ol className="space-y-1.5 text-sm text-on-surface list-none">
-                    <li className="flex items-start gap-2"><span className="text-primary font-bold shrink-0">1.</span> Click <span className="font-bold">Copy</span> above</li>
-                    <li className="flex items-start gap-2"><span className="text-primary font-bold shrink-0">2.</span> Click inside the terminal window</li>
-                    <li className="flex items-start gap-2"><span className="text-primary font-bold shrink-0">3.</span> Press <kbd className="bg-surface-container-high rounded px-1.5 py-0.5 text-xs font-mono">{pasteKey}</kbd> to paste</li>
-                    <li className="flex items-start gap-2"><span className="text-primary font-bold shrink-0">4.</span> Press Enter</li>
-                  </ol>
-                  <div className="bg-secondary/10 border border-secondary/20 rounded-xl px-3 py-2 text-xs text-on-surface-variant">
-                    Leave the terminal window open — don't close it!
-                  </div>
-                </div>
+              <div className="space-y-5">
+                {os === "windows" ? (
+                  <>
+                    <div>
+                      <h2 className="text-lg font-headline font-bold text-on-surface">Run the file</h2>
+                      <p className="text-sm text-on-surface-variant mt-1">Open your Downloads folder and double-click the file.</p>
+                    </div>
+                    <div className="bg-surface-container rounded-xl px-4 py-3 flex items-center gap-3">
+                      <span className="text-xl shrink-0">📄</span>
+                      <div>
+                        <p className="text-sm font-bold text-on-surface">join-node.bat</p>
+                        <p className="text-xs text-on-surface-variant">Double-click to run</p>
+                      </div>
+                    </div>
+                    <p className="text-xs text-on-surface-variant">A window will open and close on its own. Leave it until it says Done.</p>
+                  </>
+                ) : (
+                  <>
+                    <div>
+                      <h2 className="text-lg font-headline font-bold text-on-surface">Open Terminal</h2>
+                      <p className="text-sm text-on-surface-variant mt-1">Press <kbd className="bg-surface-container-high rounded px-1.5 py-0.5 text-xs font-mono">⌘ Space</kbd>, type <strong>Terminal</strong>, press Enter.</p>
+                    </div>
+                    <div>
+                      <p className="text-xs text-on-surface-variant mb-1.5">Then paste this command:</p>
+                      <div className="bg-surface-container-high rounded-xl p-3 flex items-start gap-2">
+                        <code className="text-xs font-mono text-on-surface flex-1 break-all leading-relaxed">{curlCommand}</code>
+                        <button onClick={handleCopyCurl}
+                          className="shrink-0 px-2 py-1 bg-primary/10 text-primary rounded-lg text-xs font-bold hover:bg-primary/20 transition-all">
+                          {cmdCopied ? "Copied!" : "Copy"}
+                        </button>
+                      </div>
+                    </div>
+                  </>
+                )}
                 <div className="flex gap-2">
                   <button onClick={() => setJoinStep(1)}
                     className="flex-1 py-3 bg-surface-container text-on-surface rounded-xl text-sm font-bold hover:bg-surface-container-high transition-all">
@@ -437,35 +453,22 @@ export function Inbox() {
                   </button>
                   <button onClick={() => setJoinStep(3)}
                     className="flex-[2] py-3 bg-primary text-on-primary rounded-xl text-sm font-bold hover:brightness-110 transition-all flex items-center justify-center gap-2">
-                    It's running <ArrowRight className="w-4 h-4" />
+                    I've run it <ArrowRight className="w-4 h-4" />
                   </button>
                 </div>
               </div>
             )}
 
-            {/* Step 3 — Join */}
+            {/* Step 3 — Waiting */}
             {joinStep === 3 && (
-              <div className="space-y-4">
+              <div className="space-y-5">
                 <div>
-                  <h2 className="text-lg font-headline font-bold text-on-surface">You're almost in!</h2>
-                  <p className="text-sm text-on-surface-variant mt-1">Click the button below to add this computer to the processing pool.</p>
+                  <h2 className="text-lg font-headline font-bold text-on-surface">Connecting...</h2>
+                  <p className="text-sm text-on-surface-variant mt-1">This should only take a few seconds.</p>
                 </div>
-                <div className="bg-surface-container rounded-xl p-4 text-sm text-on-surface-variant space-y-1">
-                  <p>✓ Terminal open</p>
-                  <p>✓ Command running</p>
-                  <p className="text-primary font-bold">→ Click Join to connect</p>
-                </div>
-                <div>
-                  <label className="block text-xs font-bold uppercase tracking-widest text-on-surface-variant mb-1.5">
-                    Name this computer <span className="normal-case font-normal">(optional)</span>
-                  </label>
-                  <input
-                    type="text"
-                    value={joinName}
-                    onChange={e => setJoinName(e.target.value)}
-                    placeholder={os === "mac" ? "Jacob's Mac" : "Jacob's PC"}
-                    className="w-full bg-surface-container-high rounded-xl px-3 py-2.5 text-sm border-none ring-1 ring-outline-variant/30 focus:ring-primary outline-none text-on-surface"
-                  />
+                <div className="flex flex-col items-center gap-3 py-6">
+                  <Loader2 className="w-10 h-10 text-primary animate-spin" />
+                  <p className="text-sm text-on-surface-variant">Watching for this computer...</p>
                 </div>
                 {joinStatus === "error" && joinError && (
                   <div className="bg-error/10 border border-error/20 rounded-xl px-3 py-2 text-xs text-error">
@@ -479,12 +482,12 @@ export function Inbox() {
                   </button>
                   {joinStatus === "joining" ? (
                     <div className="flex-[2] py-3 bg-primary text-on-primary rounded-xl text-sm font-bold flex items-center justify-center gap-2">
-                      <Loader2 className="w-4 h-4 animate-spin" /> Joining…
+                      <Loader2 className="w-4 h-4 animate-spin" /> Connecting…
                     </div>
                   ) : (
                     <button onClick={handleJoin}
-                      className="flex-[2] py-3 bg-primary text-on-primary rounded-xl text-sm font-bold hover:brightness-110 transition-all flex items-center justify-center gap-2">
-                      Join as node <ArrowRight className="w-4 h-4" />
+                      className="flex-[2] py-3 bg-surface-container-high text-on-surface rounded-xl text-sm font-bold hover:brightness-105 transition-all flex items-center justify-center gap-2">
+                      Connect manually <ArrowRight className="w-4 h-4" />
                     </button>
                   )}
                 </div>

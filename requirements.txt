@@ -6,3 +6,4 @@ pydantic
 ollama
 requests
 openai-whisper
+zeroconf
