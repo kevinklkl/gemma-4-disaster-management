@@ -15,7 +15,7 @@ from fastapi import FastAPI, Request, HTTPException, BackgroundTasks, WebSocket,
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-from engine.ollama_client import call_ollama, call_ollama_batch, node_pool, _request_single, _request_batch, MODEL_NAME, LOCAL_NUM_GPU
+from engine.ollama_client import call_ollama, call_ollama_batch, node_pool, _request_single, _request_batch, MODEL_NAME, LOCAL_NUM_GPU, transfer_model_to_node
 from engine.extraction.parser import parse_response
 from engine.extraction.validator import validate_and_canonicalize
 from prompts.extraction_prompt import build_extraction_prompt
@@ -724,6 +724,17 @@ def _detect_num_gpu(ip: str) -> int:
     return LOCAL_NUM_GPU
 
 
+def _transfer_then_register(ip: str, node_name: str):
+    """Background task: push the model to a node that lacks it, then register it."""
+    base_url = f"http://{ip}:11434"
+    if transfer_model_to_node(base_url):
+        num_gpu = _detect_num_gpu(ip)
+        status = node_pool.register(f"{base_url}/api/generate", node_name, num_gpu=num_gpu)
+        print(f"[nodes] {ip} ({node_name}) auto-registered after transfer, status={status}")
+    else:
+        print(f"[nodes] model transfer to {ip} ({node_name}) failed — node not added")
+
+
 @app.post("/api/nodes")
 async def register_node(request: Request, body: NodeRegistration):
     # X-Forwarded-For is set by the Vite dev proxy (xfwd: true).
@@ -736,19 +747,24 @@ async def register_node(request: Request, body: NodeRegistration):
     if is_loopback:
         return {"ok": True, "status": "loopback", "nodes": node_pool.list_nodes()}
 
-    # Verify Ollama is reachable and has the required model installed
+    # Verify Ollama is reachable
     try:
         resp = await asyncio.to_thread(
             lambda: requests.get(f"http://{ip}:11434/api/tags", timeout=5)
         )
         resp.raise_for_status()
         installed = [m["name"] for m in resp.json().get("models", [])]
-        if not any(MODEL_NAME in m for m in installed):
-            return {"ok": False, "status": "no_model", "nodes": node_pool.list_nodes()}
+        has_model = any(MODEL_NAME in m for m in installed)
     except Exception:
         return {"ok": False, "status": "unreachable", "nodes": node_pool.list_nodes()}
 
     node_name = body.name or ip
+
+    if not has_model:
+        threading.Thread(
+            target=_transfer_then_register, args=(ip, node_name), daemon=True
+        ).start()
+        return {"ok": True, "status": "transferring", "nodes": node_pool.list_nodes()}
 
     num_gpu = await asyncio.to_thread(_detect_num_gpu, ip)
     print(f"[nodes] {ip} ({node_name}) detected num_gpu={num_gpu}")
@@ -798,10 +814,15 @@ async def probe_node(request: Request):
         )
         resp.raise_for_status()
         installed = [m["name"] for m in resp.json().get("models", [])]
-        if not any(MODEL_NAME in m for m in installed):
-            return {"joined": False}
+        has_model = any(MODEL_NAME in m for m in installed)
     except Exception:
         return {"joined": False}
+
+    if not has_model:
+        threading.Thread(
+            target=_transfer_then_register, args=(ip, ip), daemon=True
+        ).start()
+        return {"joined": False, "transferring": True}
 
     node_pool.register(url, ip, num_gpu=-1)
     return {"joined": True, "isHost": False, "nodes": node_pool.list_nodes()}
@@ -851,6 +872,7 @@ async def download_join_script(request: Request, name: str = ""):
         node_name = safe_name if safe_name else "$(hostname)"
         script = (
             "#!/bin/bash\n"
+            'chmod +x "$0"\n'
             'echo "Starting Ollama on the network..."\n'
             "OLLAMA_HOST=0.0.0.0 ollama serve &\n"
             "OLLAMA_PID=$!\n"
@@ -865,7 +887,7 @@ async def download_join_script(request: Request, name: str = ""):
             'echo "Press Ctrl+C to stop contributing."\n'
             "wait $OLLAMA_PID\n"
         )
-        filename = "join-node.sh"
+        filename = "join-node.command"
 
     return Response(
         content=script,
