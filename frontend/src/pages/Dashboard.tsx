@@ -232,7 +232,10 @@ export function Dashboard() {
     const item = card?.items.find(i => i.key === itemKey);
     if (!card || !item) return;
 
-    const newTotal = (item.totalQty != null && item.totalPacked >= item.totalQty) ? 0 : (item.totalQty ?? 0);
+    const isPacked = item.totalQty != null
+      ? item.totalPacked >= item.totalQty
+      : item.totalPacked > 0;
+    const newTotal = isPacked ? 0 : (item.totalQty ?? 1);
     applyPackingUpdate(card, item, newTotal);
   };
 
@@ -297,7 +300,7 @@ export function Dashboard() {
     if (!card) return;
 
     const unpackedItems = card.items
-      .filter(i => i.totalQty == null || i.totalPacked < i.totalQty)
+      .filter(i => i.totalQty != null ? i.totalPacked < i.totalQty : i.totalPacked === 0)
       .map(i => ({
         ...i,
         totalQty: i.totalQty != null ? i.totalQty - i.totalPacked : i.totalQty,

@@ -71,6 +71,8 @@ function computeProgress(items: AggregatedItem[]): { packed: number; total: numb
   for (const item of items) {
     if (item.totalQty == null) {
       hasUnknown = true;
+      total += 1;
+      if (item.totalPacked > 0) packed += 1;
     } else {
       total += item.totalQty;
       packed += item.totalPacked;
@@ -79,9 +81,13 @@ function computeProgress(items: AggregatedItem[]): { packed: number; total: numb
   return { packed, total, pct: total > 0 ? (packed / total) * 100 : 0, hasUnknown };
 }
 
+function itemIsPacked(item: AggregatedItem): boolean {
+  return item.totalQty != null ? item.totalPacked >= item.totalQty : item.totalPacked > 0;
+}
+
 export const LocationCard = memo(function LocationCard({ card, now, onToggleItemPacked, onUpdateItemPackedQty, onDispatch }: LocationCardProps) {
   const progress = computeProgress(card.items);
-  const allPacked = card.items.every(i => i.totalQty != null && i.totalPacked >= i.totalQty);
+  const allPacked = card.items.every(itemIsPacked);
   const somePacked = card.items.some(i => i.totalPacked > 0);
 
   const accent = PRIO_ACCENT[card.urgency] ?? PRIO_ACCENT.medium;
@@ -196,7 +202,7 @@ export const LocationCard = memo(function LocationCard({ card, now, onToggleItem
         {card.items.length > 0 && (
           <ul className="flex flex-col gap-1.5">
             {card.items.map(item => {
-              const isFullyPacked = item.totalQty != null && item.totalPacked >= item.totalQty;
+              const isFullyPacked = itemIsPacked(item);
               return (
                 <li
                   key={item.key}
