@@ -1,5 +1,4 @@
 import asyncio
-import base64
 import csv
 import ipaddress
 import json
@@ -11,7 +10,6 @@ import requests
 from zeroconf import ServiceInfo, Zeroconf
 from contextlib import contextmanager
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any, List, Optional
 from fastapi import FastAPI, Request, HTTPException, BackgroundTasks, WebSocket, WebSocketDisconnect, Response
 from fastapi.middleware.cors import CORSMiddleware
@@ -787,12 +785,6 @@ async def unregister_node_me(request: Request):
     return {"ok": removed, "nodes": node_pool.list_nodes()}
 
 
-@app.get("/api/nodes/icon")
-def node_icon():
-    icon_path = Path(__file__).parent.parent / "frontend" / "public" / "akbay" / "primary-stacked-on-dark.png"
-    return Response(content=icon_path.read_bytes(), media_type="image/png")
-
-
 @app.get("/api/nodes/join-script")
 async def download_join_script(request: Request, name: str = ""):
     host_base = f"http://{MDNS_NAME}:{MDNS_PORT}"
@@ -804,89 +796,16 @@ async def download_join_script(request: Request, name: str = ""):
 
     ua = request.headers.get("user-agent", "")
     if "Windows" in ua:
-        name_expr = safe_name if safe_name else "$env:COMPUTERNAME"
-        ps = (
-            '$env:OLLAMA_HOST = "0.0.0.0"\n'
-            '$op = Start-Process -FilePath "ollama" -ArgumentList "serve" -PassThru -WindowStyle Hidden\n'
-            'Start-Sleep -Seconds 4\n'
-            '$nn = "__NODE_NAME__"\n'
-            '$hb = "__HOST_BASE__"\n'
-            'try { Invoke-RestMethod -Uri "$hb/api/nodes" -Method POST -ContentType "application/json" -Body (ConvertTo-Json @{name=$nn}) } catch {}\n'
-            'Add-Type -AssemblyName System.Windows.Forms\n'
-            'Add-Type -AssemblyName System.Drawing\n'
-            '$f = New-Object System.Windows.Forms.Form\n'
-            '$f.Text = "Gemma Node"\n'
-            '$f.Size = New-Object System.Drawing.Size(270,185)\n'
-            '$f.StartPosition = "CenterScreen"\n'
-            '$f.FormBorderStyle = "FixedSingle"\n'
-            '$f.MaximizeBox = $false\n'
-            '$f.BackColor = [System.Drawing.Color]::FromArgb(18,18,18)\n'
-            'try {\n'
-            '  $ms = New-Object System.IO.MemoryStream(,(Invoke-WebRequest -Uri "$hb/api/nodes/icon" -UseBasicParsing).Content)\n'
-            '  $f.Icon = [System.Drawing.Icon]::FromHandle(([System.Drawing.Bitmap]::FromStream($ms)).GetHicon())\n'
-            '  $ms.Dispose()\n'
-            '} catch {}\n'
-            '$l1 = New-Object System.Windows.Forms.Label\n'
-            '$l1.Text = "GEMMA NODE"\n'
-            '$l1.Font = New-Object System.Drawing.Font("Segoe UI",8,[System.Drawing.FontStyle]::Bold)\n'
-            '$l1.ForeColor = [System.Drawing.Color]::FromArgb(187,134,252)\n'
-            '$l1.Location = New-Object System.Drawing.Point(16,14)\n'
-            '$l1.AutoSize = $true\n'
-            '$f.Controls.Add($l1)\n'
-            '$l2 = New-Object System.Windows.Forms.Label\n'
-            '$l2.Text = $nn\n'
-            '$l2.Font = New-Object System.Drawing.Font("Segoe UI",12,[System.Drawing.FontStyle]::Bold)\n'
-            '$l2.ForeColor = [System.Drawing.Color]::White\n'
-            '$l2.Location = New-Object System.Drawing.Point(16,34)\n'
-            '$l2.AutoSize = $true\n'
-            '$f.Controls.Add($l2)\n'
-            '$ls = New-Object System.Windows.Forms.Label\n'
-            '$ls.Text = "Connecting..."\n'
-            '$ls.Font = New-Object System.Drawing.Font("Segoe UI",10)\n'
-            '$ls.ForeColor = [System.Drawing.Color]::FromArgb(150,150,150)\n'
-            '$ls.Location = New-Object System.Drawing.Point(16,70)\n'
-            '$ls.AutoSize = $true\n'
-            '$f.Controls.Add($ls)\n'
-            '$lj = New-Object System.Windows.Forms.Label\n'
-            '$lj.Text = "0 jobs processed"\n'
-            '$lj.Font = New-Object System.Drawing.Font("Segoe UI",9)\n'
-            '$lj.ForeColor = [System.Drawing.Color]::FromArgb(90,90,90)\n'
-            '$lj.Location = New-Object System.Drawing.Point(16,94)\n'
-            '$lj.AutoSize = $true\n'
-            '$f.Controls.Add($lj)\n'
-            '$sb = New-Object System.Windows.Forms.Button\n'
-            '$sb.Text = "Stop sharing"\n'
-            '$sb.Location = New-Object System.Drawing.Point(16,132)\n'
-            '$sb.Size = New-Object System.Drawing.Size(108,28)\n'
-            '$sb.BackColor = [System.Drawing.Color]::FromArgb(45,20,20)\n'
-            '$sb.ForeColor = [System.Drawing.Color]::FromArgb(230,90,90)\n'
-            '$sb.FlatStyle = "Flat"\n'
-            '$sb.Add_Click({ $f.Close() })\n'
-            '$f.Controls.Add($sb)\n'
-            '$tmr = New-Object System.Windows.Forms.Timer\n'
-            '$tmr.Interval = 2000\n'
-            '$tmr.Add_Tick({\n'
-            '  try {\n'
-            '    $r = Invoke-RestMethod -Uri "$hb/api/nodes" -Method GET -TimeoutSec 2\n'
-            '    $m = $r.nodes | Where-Object { $_.name -eq $nn }\n'
-            '    if ($m) {\n'
-            '      if ($m.busy) { $ls.Text = "Processing..."; $ls.ForeColor = [System.Drawing.Color]::FromArgb(255,193,7) }\n'
-            '      else { $ls.Text = "Connected"; $ls.ForeColor = [System.Drawing.Color]::FromArgb(76,175,80) }\n'
-            '      $lj.Text = "$($m.jobs_done) jobs processed"\n'
-            '    }\n'
-            '  } catch {}\n'
-            '})\n'
-            '$tmr.Start()\n'
-            '$f.Add_FormClosed({\n'
-            '  $tmr.Stop()\n'
-            '  try { Invoke-RestMethod -Uri "$hb/api/nodes/me" -Method DELETE -TimeoutSec 2 } catch {}\n'
-            '  if ($op -and -not $op.HasExited) { $op.Kill() }\n'
-            '})\n'
-            '[void]$f.ShowDialog()\n'
+        name_val = safe_name if safe_name else "%COMPUTERNAME%"
+        script = (
+            "@echo off\r\n"
+            'start /MIN "Akbay Node" cmd /k "set OLLAMA_HOST=0.0.0.0 && ollama serve"\r\n'
+            "timeout /t 4 /nobreak > nul\r\n"
+            f'curl -s -X POST {host_base}/api/nodes'
+            f' -H "Content-Type: application/json"'
+            f' -d "{{\\\"name\\\":\\\"{name_val}\\\"}}"\r\n'
+            "timeout /t 3 /nobreak > nul\r\n"
         )
-        ps_script = ps.replace("__NODE_NAME__", name_expr).replace("__HOST_BASE__", host_base)
-        ps_b64 = base64.b64encode(ps_script.encode("utf-16-le")).decode("ascii")
-        script = f"@echo off\r\npowershell -ExecutionPolicy Bypass -WindowStyle Hidden -EncodedCommand {ps_b64}\r\n"
         filename = "join-node.bat"
     else:
         node_name = safe_name if safe_name else "$(hostname)"
