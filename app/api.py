@@ -855,6 +855,7 @@ async def download_join_script(request: Request, name: str = ""):
             'start "" /MIN "%~f0" run\r\n'
             "exit /b\r\n"
             ":run\r\n"
+            "netsh advfirewall firewall add rule name=\"Ollama Node\" dir=in action=allow protocol=TCP localport=11434 > nul 2>&1\r\n"
             'start /MIN "Akbay Node" cmd /k "set OLLAMA_HOST=0.0.0.0 && ollama serve"\r\n'
             "set tries=0\r\n"
             ":wait\r\n"
