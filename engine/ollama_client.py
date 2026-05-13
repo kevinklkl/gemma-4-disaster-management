@@ -1,6 +1,8 @@
 import json
 import os
 import pathlib
+import shutil
+import subprocess
 import threading
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -202,27 +204,39 @@ def _find_model_manifest(models_dir: pathlib.Path, model_name: str) -> "pathlib.
 
 
 def _upload_blob(node_base_url: str, digest: str, blob_path: pathlib.Path, retries: int = 3) -> bool:
-    size = blob_path.stat().st_size
-    size_mb = size // (1024 * 1024)
+    size_mb = blob_path.stat().st_size // (1024 * 1024)
     url = f"{node_base_url}/api/blobs/{digest}"
+    use_curl = shutil.which("curl") is not None
+
     for attempt in range(1, retries + 1):
         print(f"[model-transfer] uploading {digest[:20]}… ({size_mb} MB) attempt {attempt}/{retries}")
         try:
-            with open(blob_path, "rb") as f:
-                up = requests.post(
-                    url,
-                    data=f,
-                    headers={
-                        "Content-Type": "application/octet-stream",
-                        "Content-Length": str(size),
-                    },
-                    timeout=1800,
+            if use_curl:
+                result = subprocess.run(
+                    ["curl", "-s", "-X", "POST", url,
+                     "-H", "Content-Type: application/octet-stream",
+                     "--data-binary", f"@{blob_path}",
+                     "--max-time", "1800",
+                     "-w", "\n%{http_code}"],
+                    capture_output=True, text=True, timeout=1900,
                 )
-            if up.ok:
-                return True
-            print(f"[model-transfer] blob upload failed ({up.status_code}): {up.text}")
+                status = result.stdout.strip().splitlines()[-1] if result.stdout.strip() else "0"
+                if result.returncode == 0 and status.startswith("2"):
+                    return True
+                print(f"[model-transfer] curl upload failed: http={status} {result.stderr[:200]}")
+            else:
+                with open(blob_path, "rb") as f:
+                    up = requests.post(
+                        url, data=f,
+                        headers={"Content-Type": "application/octet-stream",
+                                 "Content-Length": str(blob_path.stat().st_size)},
+                        timeout=1800,
+                    )
+                if up.ok:
+                    return True
+                print(f"[model-transfer] upload failed ({up.status_code}): {up.text}")
         except Exception as e:
-            print(f"[model-transfer] blob upload error (attempt {attempt}): {e}")
+            print(f"[model-transfer] upload error (attempt {attempt}): {e}")
     return False
 
 
