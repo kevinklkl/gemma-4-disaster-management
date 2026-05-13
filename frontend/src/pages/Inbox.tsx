@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { TopNav } from "../components/TopNav";
 import { MobileNav } from "../components/MobileNav";
-import { MoreVertical, MessageSquare, Mic, Smartphone, UserCircle, CheckCircle2, AlertCircle, Loader2, ArrowRight, X, RefreshCw, Timer } from "lucide-react";
+import { MoreVertical, MessageSquare, Mic, Smartphone, UserCircle, CheckCircle2, AlertCircle, Loader2, ArrowRight, X, RefreshCw, Timer, Search } from "lucide-react";
 
 type ExtractedItem = {
   name: string;
@@ -63,6 +63,9 @@ export function Inbox() {
   const [inboxTotal, setInboxTotal] = useState(0);
   const [inboxOffset, setInboxOffset] = useState(0);
   const PAGE_SIZE = 50;
+  const [activeSource, setActiveSource] = useState("all");
+  const [searchQuery, setSearchQuery] = useState("");
+  const searchDebounce = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [stats, setStats] = useState({ processed: 0, inQueue: 0, failed: 0 });
   const [, setProcessingIds] = useState<Set<string>>(new Set());
   const processingRefs = useRef<Set<string>>(new Set());
@@ -197,28 +200,26 @@ export function Inbox() {
       .catch(console.error);
   };
 
-  useEffect(() => {
-    fetch(`/api/messages?limit=${PAGE_SIZE}&offset=0`)
+  const doFetch = useCallback((src: string, q: string, offset: number, append: boolean) => {
+    const p = new URLSearchParams({ limit: String(PAGE_SIZE), offset: String(offset) });
+    if (src !== "all") p.set("source", src);
+    if (q.trim()) p.set("q", q.trim());
+    fetch(`/api/messages?${p}`)
       .then(r => r.json())
       .then((data: { messages: Message[]; total: number }) => {
-        setMessages(data.messages);
+        setMessages(prev => append ? [...prev, ...data.messages] : data.messages);
         setInboxTotal(data.total);
-        setInboxOffset(data.messages.length);
+        setInboxOffset(offset + data.messages.length);
       })
       .catch(console.error);
+  }, []);
+
+  useEffect(() => {
+    doFetch("all", "", 0, false);
     fetchStats();
   }, []);
 
-  const loadOlder = () => {
-    fetch(`/api/messages?limit=${PAGE_SIZE}&offset=${inboxOffset}`)
-      .then(r => r.json())
-      .then((data: { messages: Message[]; total: number }) => {
-        setMessages(prev => [...prev, ...data.messages]);
-        setInboxTotal(data.total);
-        setInboxOffset(prev => prev + data.messages.length);
-      })
-      .catch(console.error);
-  };
+  const loadOlder = () => doFetch(activeSource, searchQuery, inboxOffset, true);
 
   const triggerProcess = useCallback((msg: Message) => {
     if (processingRefs.current.has(msg.id)) return;
@@ -615,20 +616,65 @@ export function Inbox() {
                 className="inline-flex p-[3px] rounded-full"
                 style={{ background: "var(--color-paper-warm)", border: "1px solid var(--color-paper-edge)" }}
               >
-                {["all sources", "sms", "voice", "manual"].map((label, i) => (
-                  <button
-                    key={label}
-                    className="px-3.5 py-1.5 text-xs font-semibold whitespace-nowrap rounded-full transition-colors"
-                    style={
-                      i === 0
-                        ? { background: "var(--color-paper)", color: "var(--color-ink)", boxShadow: "var(--shadow-1)" }
-                        : { background: "transparent", color: "var(--color-ash)" }
-                    }
-                  >
-                    {label}
-                  </button>
-                ))}
+                {(["all sources", "sms", "voice", "manual"] as const).map((label) => {
+                  const val = label === "all sources" ? "all" : label;
+                  const active = activeSource === val;
+                  return (
+                    <button
+                      key={label}
+                      onClick={() => {
+                        setActiveSource(val);
+                        doFetch(val, searchQuery, 0, false);
+                      }}
+                      className="px-3.5 py-1.5 text-xs font-semibold whitespace-nowrap rounded-full transition-colors"
+                      style={
+                        active
+                          ? { background: "var(--color-paper)", color: "var(--color-ink)", boxShadow: "var(--shadow-1)" }
+                          : { background: "transparent", color: "var(--color-ash)" }
+                      }
+                    >
+                      {label}
+                    </button>
+                  );
+                })}
               </div>
+            </div>
+
+            <div
+              className="relative mb-3"
+            >
+              <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 pointer-events-none" style={{ color: "var(--color-ash)" }} />
+              <input
+                type="text"
+                value={searchQuery}
+                onChange={(e) => {
+                  const val = e.target.value;
+                  setSearchQuery(val);
+                  if (searchDebounce.current) clearTimeout(searchDebounce.current);
+                  searchDebounce.current = setTimeout(() => {
+                    doFetch(activeSource, val, 0, false);
+                  }, 300);
+                }}
+                placeholder="search by phone number, message content…"
+                className="w-full pl-10 pr-4 py-2.5 text-sm rounded-xl outline-none transition-colors"
+                style={{
+                  background: "var(--color-paper-warm)",
+                  border: "1px solid var(--color-paper-edge)",
+                  color: "var(--color-ink)",
+                }}
+              />
+              {searchQuery && (
+                <button
+                  onClick={() => {
+                    setSearchQuery("");
+                    doFetch(activeSource, "", 0, false);
+                  }}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 p-0.5 rounded"
+                  style={{ color: "var(--color-ash)" }}
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              )}
             </div>
 
             <div className="space-y-3">

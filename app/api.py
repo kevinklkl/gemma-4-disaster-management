@@ -468,14 +468,27 @@ def get_inbox():
 
 
 @app.get("/api/messages")
-def get_messages(limit: int = 50, offset: int = 0):
+def get_messages(limit: int = 50, offset: int = 0, source: str = "", q: str = ""):
+    conditions = ["status != 'fulfilled'"]
+    params: list = []
+
+    if source and source != "all":
+        conditions.append("message_type = ?")
+        params.append(source)
+
+    if q.strip():
+        conditions.append("(sender LIKE ? OR message LIKE ?)")
+        like = f"%{q.strip()}%"
+        params.extend([like, like])
+
+    where = " AND ".join(conditions)
     with get_db() as conn:
         total = conn.execute(
-            "SELECT COUNT(*) FROM messages WHERE status != 'fulfilled'"
+            f"SELECT COUNT(*) FROM messages WHERE {where}", params
         ).fetchone()[0]
         rows = conn.execute(
-            "SELECT * FROM messages WHERE status != 'fulfilled' ORDER BY id DESC LIMIT ? OFFSET ?",
-            (limit, offset)
+            f"SELECT * FROM messages WHERE {where} ORDER BY id DESC LIMIT ? OFFSET ?",
+            params + [limit, offset]
         ).fetchall()
     return {"messages": [row_to_message(r) for r in rows], "total": total, "offset": offset, "limit": limit}
 
