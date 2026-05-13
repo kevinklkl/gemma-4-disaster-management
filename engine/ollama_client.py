@@ -171,6 +171,11 @@ node_pool = NodePool()
 # but keeps things from blowing up if any other code still references it.
 ollama_lock = node_pool._nodes[0].lock
 
+# IPs currently being transferred to — prevents probe_node from spawning
+# duplicate transfer threads while one is already in progress.
+_transfers_in_progress: set[str] = set()
+_transfers_lock = threading.Lock()
+
 
 def _get_ollama_models_dir() -> "pathlib.Path | None":
     for candidate in [
@@ -196,6 +201,31 @@ def _find_model_manifest(models_dir: pathlib.Path, model_name: str) -> "pathlib.
     return None
 
 
+def _upload_blob(node_base_url: str, digest: str, blob_path: pathlib.Path, retries: int = 3) -> bool:
+    size = blob_path.stat().st_size
+    size_mb = size // (1024 * 1024)
+    url = f"{node_base_url}/api/blobs/{digest}"
+    for attempt in range(1, retries + 1):
+        print(f"[model-transfer] uploading {digest[:20]}… ({size_mb} MB) attempt {attempt}/{retries}")
+        try:
+            with open(blob_path, "rb") as f:
+                up = requests.post(
+                    url,
+                    data=f,
+                    headers={
+                        "Content-Type": "application/octet-stream",
+                        "Content-Length": str(size),
+                    },
+                    timeout=1800,
+                )
+            if up.ok:
+                return True
+            print(f"[model-transfer] blob upload failed ({up.status_code}): {up.text}")
+        except Exception as e:
+            print(f"[model-transfer] blob upload error (attempt {attempt}): {e}")
+    return False
+
+
 def transfer_model_to_node(node_base_url: str) -> bool:
     """Copy MODEL_NAME from the local Ollama to a remote Ollama node over LAN.
 
@@ -203,6 +233,21 @@ def transfer_model_to_node(node_base_url: str) -> bool:
     pulled models and local GGUF imports), uploads each blob to the remote node,
     then calls /api/create to register the model name.
     """
+    ip = node_base_url.split("//")[-1].split(":")[0]
+    with _transfers_lock:
+        if ip in _transfers_in_progress:
+            print(f"[model-transfer] transfer to {ip} already in progress, skipping")
+            return False
+        _transfers_in_progress.add(ip)
+
+    try:
+        return _do_transfer(node_base_url)
+    finally:
+        with _transfers_lock:
+            _transfers_in_progress.discard(ip)
+
+
+def _do_transfer(node_base_url: str) -> bool:
     print(f"[model-transfer] starting → {node_base_url}")
 
     models_dir = _get_ollama_models_dir()
@@ -220,13 +265,11 @@ def transfer_model_to_node(node_base_url: str) -> bool:
 
     blobs_dir = models_dir / "blobs"
 
-    # Collect config + all layers from the manifest
     all_layers = []
     if "config" in manifest:
         all_layers.append(manifest["config"])
     all_layers.extend(manifest.get("layers", []))
 
-    # The model weights layer — used to build the FROM line for /api/create
     model_blob_digest = next(
         (l["digest"] for l in manifest.get("layers", [])
          if l.get("mediaType") == "application/vnd.ollama.image.model"),
@@ -235,7 +278,7 @@ def transfer_model_to_node(node_base_url: str) -> bool:
 
     for layer in all_layers:
         digest = layer["digest"]
-        blob_path = blobs_dir / digest.replace(":", "-")  # sha256:abc → sha256-abc
+        blob_path = blobs_dir / digest.replace(":", "-")
         if not blob_path.exists():
             print(f"[model-transfer] blob not found: {blob_path}")
             return False
@@ -248,27 +291,11 @@ def transfer_model_to_node(node_base_url: str) -> bool:
         except Exception:
             pass
 
-        size_mb = blob_path.stat().st_size // (1024 * 1024)
-        print(f"[model-transfer] uploading {digest[:20]}… ({size_mb} MB)")
-        try:
-            with open(blob_path, "rb") as f:
-                up = requests.post(
-                    f"{node_base_url}/api/blobs/{digest}",
-                    data=f,
-                    headers={"Content-Type": "application/octet-stream"},
-                    timeout=1800,
-                )
-            if not up.ok:
-                print(f"[model-transfer] blob upload failed: {up.text}")
-                return False
-        except Exception as e:
-            print(f"[model-transfer] blob upload error: {e}")
+        if not _upload_blob(node_base_url, digest, blob_path):
             return False
 
         print(f"[model-transfer] {digest[:20]}… done")
 
-    # Build modelfile: use blob reference for FROM so the remote doesn't need
-    # to resolve any external model name, then carry over template/params/system.
     try:
         show = requests.post(
             "http://localhost:11434/api/show",
