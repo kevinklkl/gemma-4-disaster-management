@@ -91,9 +91,6 @@ export const LocationCard = memo(function LocationCard({ card, now, onToggleItem
     ? `ORD-${card.messageIds[0]}${card.messageIds.length > 1 ? ` +${card.messageIds.length - 1}` : ""}`
     : "ORD-—";
 
-  const snippet = card.contents.length > 0 ? card.contents[0] : null;
-  const moreCount = card.contents.length > 1 ? card.contents.length - 1 : 0;
-
   return (
     <div
       className="rounded-[10px] overflow-hidden flex flex-col"
@@ -260,25 +257,6 @@ export const LocationCard = memo(function LocationCard({ card, now, onToggleItem
           </ul>
         )}
       </div>
-
-      {snippet && (
-        <div
-          className="px-5 py-2.5"
-          style={{ background: "var(--color-paper)", borderTop: "1px solid var(--color-paper-edge)" }}
-        >
-          <p
-            className="text-[12px] truncate"
-            style={{ color: "var(--color-ink-soft)", fontFamily: "var(--font-mono)", lineHeight: 1.6 }}
-          >
-            "{snippet.length > 110 ? snippet.slice(0, 110) + "…" : snippet}"
-            {moreCount > 0 && (
-              <span className="ml-1.5" style={{ fontFamily: "var(--font-body)", color: "var(--color-ash)" }}>
-                (+{moreCount} more)
-              </span>
-            )}
-          </p>
-        </div>
-      )}
 
       <div className="px-4 pb-4 pt-1">
         <button
