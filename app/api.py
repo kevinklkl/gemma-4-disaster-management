@@ -777,6 +777,36 @@ async def node_status_me(request: Request):
     return {"registered": registered, "isHost": False}
 
 
+@app.get("/api/nodes/probe")
+async def probe_node(request: Request):
+    """Silently attempt to auto-register the caller if their Ollama is already running."""
+    ip = request.headers.get("x-forwarded-for") or request.client.host
+    try:
+        is_loopback = ipaddress.ip_address(ip).is_loopback
+    except ValueError:
+        is_loopback = ip == "localhost"
+    if is_loopback:
+        return {"joined": True, "isHost": True}
+
+    url = f"http://{ip}:11434/api/generate"
+    if any(n["url"] == url for n in node_pool.list_nodes()):
+        return {"joined": True, "isHost": False, "nodes": node_pool.list_nodes()}
+
+    try:
+        resp = await asyncio.to_thread(
+            lambda: requests.get(f"http://{ip}:11434/api/tags", timeout=3)
+        )
+        resp.raise_for_status()
+        installed = [m["name"] for m in resp.json().get("models", [])]
+        if not any(MODEL_NAME in m for m in installed):
+            return {"joined": False}
+    except Exception:
+        return {"joined": False}
+
+    node_pool.register(url, ip, num_gpu=-1)
+    return {"joined": True, "isHost": False, "nodes": node_pool.list_nodes()}
+
+
 @app.delete("/api/nodes/me")
 async def unregister_node_me(request: Request):
     ip = request.headers.get("x-forwarded-for") or request.client.host
@@ -799,12 +829,22 @@ async def download_join_script(request: Request, name: str = ""):
         name_val = safe_name if safe_name else "%COMPUTERNAME%"
         script = (
             "@echo off\r\n"
+            'if "%1"=="run" goto run\r\n'
+            'start "" /MIN "%~f0" run\r\n'
+            "exit /b\r\n"
+            ":run\r\n"
             'start /MIN "Akbay Node" cmd /k "set OLLAMA_HOST=0.0.0.0 && ollama serve"\r\n'
-            "timeout /t 4 /nobreak > nul\r\n"
+            "set tries=0\r\n"
+            ":wait\r\n"
+            "timeout /t 1 /nobreak > nul\r\n"
+            "curl -s http://localhost:11434/api/tags > nul 2>&1\r\n"
+            "if not errorlevel 1 goto register\r\n"
+            "set /a tries=tries+1\r\n"
+            "if %tries% lss 15 goto wait\r\n"
+            ":register\r\n"
             f'curl -s -X POST {host_base}/api/nodes'
             f' -H "Content-Type: application/json"'
             f' -d "{{\\\"name\\\":\\\"{name_val}\\\"}}"\r\n'
-            "timeout /t 3 /nobreak > nul\r\n"
         )
         filename = "join-node.bat"
     else:

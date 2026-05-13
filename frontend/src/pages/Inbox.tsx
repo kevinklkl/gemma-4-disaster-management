@@ -122,18 +122,16 @@ export function Inbox() {
       });
   };
 
-  // Auto-detect host: if you're browsing via localhost/127.0.0.1 you're the host machine
+  // On load: probe whether Ollama is already running on this machine and auto-join if so
   useEffect(() => {
-    const h = window.location.hostname;
-    if (h === "localhost" || h === "127.0.0.1") setJoinStatus("host");
-  }, []);
-
-  // Restore join status across page reloads / tab switches
-  useEffect(() => {
-    fetch("/api/nodes/me")
+    fetch("/api/nodes/probe")
       .then(r => r.json())
       .then(data => {
-        if (data.registered && !data.isHost) setJoinStatus("joined");
+        if (data.isHost) setJoinStatus("host");
+        else if (data.joined) {
+          setJoinStatus("joined");
+          if (data.nodes) setNodes(data.nodes);
+        }
       })
       .catch(() => {});
   }, []);
