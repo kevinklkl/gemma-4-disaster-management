@@ -16,7 +16,7 @@ const TABS: Tab[] = [
   { to: "/history",  label: "history",  icon: <Clock className="w-4 h-4" strokeWidth={1.75} /> },
 ];
 
-export function TopNav() {
+export function TopNav({ hideNewReport = false }: { hideNewReport?: boolean } = {}) {
   const { pathname } = useLocation();
 
   return (
@@ -53,14 +53,16 @@ export function TopNav() {
       </nav>
 
       <div className="flex items-center gap-3 ml-auto">
-        <Link
-          to="/intake"
-          className="hidden sm:inline-flex items-center gap-1.5 rounded-md py-2 px-3.5 text-sm font-semibold transition-colors"
-          style={{ background: "var(--color-araw)", color: "var(--color-ink)" }}
-        >
-          <Plus className="w-3.5 h-3.5" strokeWidth={2.2} />
-          new report
-        </Link>
+        {!hideNewReport && (
+          <Link
+            to="/intake"
+            className="hidden sm:inline-flex items-center gap-1.5 rounded-md py-2 px-3.5 text-sm font-semibold transition-colors"
+            style={{ background: "var(--color-araw)", color: "var(--color-ink)" }}
+          >
+            <Plus className="w-3.5 h-3.5" strokeWidth={2.2} />
+            new report
+          </Link>
+        )}
       </div>
     </header>
   );

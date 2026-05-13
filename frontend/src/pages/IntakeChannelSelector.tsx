@@ -1,8 +1,8 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
-import { ArrowLeft, HelpCircle, Keyboard, Mic, Camera, Mail, FlaskConical, Loader2, CheckCircle2 } from "lucide-react";
+import { Keyboard, Mic, Camera, FlaskConical, Loader2, CheckCircle2 } from "lucide-react";
 import { MobileNav } from "../components/MobileNav";
-import { Brand } from "../components/Brand";
+import { TopNav } from "../components/TopNav";
 
 export function IntakeChannelSelector() {
   const [seeding, setSeeding] = useState(false);
@@ -25,25 +25,7 @@ export function IntakeChannelSelector() {
 
   return (
     <div className="flex flex-col min-h-screen">
-      <header
-        className="flex justify-between items-center w-full px-6 py-3 sticky top-0 z-50"
-        style={{ background: "var(--color-dagat)", color: "var(--color-bone)", borderBottom: "1px solid var(--color-dagat-deep)" }}
-      >
-        <div className="flex items-center gap-3">
-          <Link
-            to="/"
-            className="flex items-center justify-center w-9 h-9 rounded-full active:scale-95 duration-150"
-            style={{ color: "var(--color-bone)" }}
-            aria-label="back"
-          >
-            <ArrowLeft className="w-5 h-5" strokeWidth={1.75} />
-          </Link>
-          <Brand variant="on-dark" size={26} linkTo={null} />
-        </div>
-        <div className="flex items-center gap-2">
-          <HelpCircle className="w-5 h-5" strokeWidth={1.75} style={{ color: "rgba(251,246,232,0.7)" }} />
-        </div>
-      </header>
+      <TopNav hideNewReport />
 
       <main className="flex-1 px-6 pt-8 pb-32 max-w-lg mx-auto w-full">
         <section className="mb-10">
@@ -106,24 +88,6 @@ export function IntakeChannelSelector() {
           </div>
         </button>
 
-        <section className="mt-6 p-6 rounded-xl bg-surface-container-highest/40 border border-outline-variant/20 flex items-center justify-between">
-          <div className="flex items-center gap-4">
-            <div className="flex items-center justify-center w-10 h-10 rounded-full bg-primary/10">
-              <Mail className="text-primary w-5 h-5" />
-            </div>
-            <div>
-              <p className="font-bold text-on-surface text-sm flex items-center gap-2">
-                SMS auto-intake
-                <span className="ak-caps px-2 py-0.5 rounded-full" style={{ background: "var(--color-damay-soft)", color: "var(--color-damay)", fontSize: 10, letterSpacing: "0.06em" }}>active</span>
-              </p>
-              <p className="text-on-surface-variant text-xs">waiting for incoming messages</p>
-            </div>
-          </div>
-          <div className="text-right">
-            <p className="text-2xl font-black text-primary leading-none">47</p>
-            <p className="ak-caps mt-0.5" style={{ color: "var(--color-ash)" }}>today</p>
-          </div>
-        </section>
       </main>
 
       <div className="fixed top-0 left-0 w-full h-full pointer-events-none -z-10 opacity-30">

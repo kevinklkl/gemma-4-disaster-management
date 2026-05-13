@@ -102,13 +102,16 @@ function aggregateByLocation(messages: ApiMessage[]): LocationCard[] {
     }
     if (channelCounts.size > 1) topChannel = "mixed";
 
+    const items = Array.from(itemMap.values());
+    if (items.length === 0) continue;
+
     cards.push({
       locationKey: key,
       location,
       urgency: highestUrgency,
       totalPersons,
       receivedAt: oldestTime,
-      items: Array.from(itemMap.values()),
+      items,
       messageIds,
       contents,
       channel: topChannel,

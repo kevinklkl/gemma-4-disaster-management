@@ -1,8 +1,8 @@
 import { useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
-import { ArrowLeft, Bell, Search, Phone, Send, Info, Loader2 } from "lucide-react";
+import { useNavigate } from "react-router-dom";
+import { Search, Phone, Send, Info, Loader2 } from "lucide-react";
 import { MobileNav } from "../components/MobileNav";
-import { Brand } from "../components/Brand";
+import { TopNav } from "../components/TopNav";
 
 export function MobileIntake() {
   const navigate = useNavigate();
@@ -40,25 +40,7 @@ export function MobileIntake() {
 
   return (
     <div className="bg-background text-on-background min-h-screen flex flex-col">
-      <nav
-        className="flex justify-between items-center w-full px-6 py-3 sticky top-0 z-50"
-        style={{ background: "var(--color-dagat)", color: "var(--color-bone)", borderBottom: "1px solid var(--color-dagat-deep)" }}
-      >
-        <div className="flex items-center gap-3">
-          <Link
-            to="/intake"
-            className="active:scale-95 duration-150 p-2 rounded-full"
-            style={{ color: "var(--color-bone)" }}
-            aria-label="back"
-          >
-            <ArrowLeft className="w-5 h-5" strokeWidth={1.75} />
-          </Link>
-          <Brand variant="on-dark" size={26} linkTo={null} />
-        </div>
-        <div className="flex items-center gap-3">
-          <Bell className="w-5 h-5" strokeWidth={1.75} style={{ color: "rgba(251,246,232,0.7)" }} />
-        </div>
-      </nav>
+      <TopNav hideNewReport />
 
       <main className="flex-grow container mx-auto px-4 pt-6 pb-32 max-w-lg">
         <div className="mb-8 px-2">
