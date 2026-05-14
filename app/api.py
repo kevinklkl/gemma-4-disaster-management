@@ -19,7 +19,7 @@ from pydantic import BaseModel
 from engine.ollama_client import call_ollama, call_ollama_batch, node_pool, _request_single, _request_batch, MODEL_NAME, LOCAL_NUM_GPU, transfer_model_to_node
 from engine.extraction.parser import parse_response
 from engine.extraction.validator import validate_and_canonicalize
-from prompts.extraction_prompt import build_extraction_prompt
+from prompts.extraction_prompt import build_extraction_prompt, _get_shared_prefix
 
 app = FastAPI()
 
@@ -104,6 +104,23 @@ MDNS_PORT = 8000
 
 
 def _get_local_ip() -> str:
+    """Return the LAN IP, skipping VPN/virtual interfaces."""
+    # Collect all non-loopback IPv4 addresses for this host
+    try:
+        candidates = [
+            info[4][0]
+            for info in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET)
+            if not info[4][0].startswith("127.")
+        ]
+    except Exception:
+        candidates = []
+
+    # Prefer 192.168.x.x (typical home/office LAN) over VPN ranges
+    for ip in candidates:
+        if ip.startswith("192.168."):
+            return ip
+
+    # Fall back to routing-table trick (picks whichever interface reaches the internet)
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         s.connect(("8.8.8.8", 80))
@@ -730,7 +747,7 @@ def _transfer_then_register(ip: str, node_name: str):
     base_url = f"http://{ip}:11434"
     if transfer_model_to_node(base_url):
         num_gpu = _detect_num_gpu(ip)
-        status = node_pool.register(f"{base_url}/api/generate", node_name, num_gpu=num_gpu)
+        status = node_pool.register(f"{base_url}/api/generate", node_name, num_gpu=num_gpu, prefix_cached=True)
         print(f"[nodes] {ip} ({node_name}) auto-registered after transfer, status={status}")
     else:
         print(f"[nodes] model transfer to {ip} ({node_name}) failed — node not added")
@@ -771,8 +788,8 @@ async def register_node(request: Request, body: NodeRegistration):
     print(f"[nodes] {ip} ({node_name}) detected num_gpu={num_gpu}")
 
     url = f"http://{ip}:11434/api/generate"
-    status = node_pool.register(url, node_name, num_gpu=num_gpu)
-    return {"ok": True, "status": status, "nodes": node_pool.list_nodes()}
+    status = node_pool.register(url, node_name, num_gpu=num_gpu, prefix_cached=True)
+    return {"ok": True, "status": status, "nodes": node_pool.list_nodes(), "cache_prompt": _get_shared_prefix()}
 
 
 @app.get("/api/nodes")

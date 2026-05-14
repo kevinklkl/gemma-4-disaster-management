@@ -7,6 +7,7 @@ import threading
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 import requests
+from prompts.extraction_prompt import build_batch_prompt, _get_shared_prefix
 
 OLLAMA_URL = "http://localhost:11434/api/generate"
 MODEL_NAME = "gemma4-e2b-unsloth"
@@ -53,7 +54,11 @@ def _build_result(body: dict) -> OllamaResult:
 LOCAL_NUM_GPU = 24  # ~60/40 GPU/CPU on host's 6 GB VRAM — tune this per machine
 
 
-def _request_single(prompt: str, temperature: float, url: str = OLLAMA_URL, num_gpu: int = LOCAL_NUM_GPU) -> OllamaResult:
+def _request_single(prompt: str, temperature: float, url: str = OLLAMA_URL, num_gpu: int = LOCAL_NUM_GPU, prefix_cached: bool = False) -> OllamaResult:
+    if prefix_cached:
+        shared = _get_shared_prefix()
+        if prompt.startswith(shared):
+            prompt = prompt[len(shared):]
     response = requests.post(
         url,
         json={
@@ -71,15 +76,18 @@ def _request_single(prompt: str, temperature: float, url: str = OLLAMA_URL, num_
                 "num_gpu": num_gpu,
             },
         },
-        timeout=60,
+        timeout=300 if prefix_cached else 60,
     )
     response.raise_for_status()
     return _build_result(response.json())
 
 
-def _request_batch(messages: list[str], temperature: float, url: str = OLLAMA_URL, num_gpu: int = LOCAL_NUM_GPU) -> OllamaResult:
-    from prompts.extraction_prompt import build_batch_prompt
+def _request_batch(messages: list[str], temperature: float, url: str = OLLAMA_URL, num_gpu: int = LOCAL_NUM_GPU, prefix_cached: bool = False) -> OllamaResult:
     prompt = build_batch_prompt(messages)
+    if prefix_cached:
+        shared = _get_shared_prefix()
+        if prompt.startswith(shared):
+            prompt = prompt[len(shared):]
     response = requests.post(
         url,
         json={
@@ -97,7 +105,7 @@ def _request_batch(messages: list[str], temperature: float, url: str = OLLAMA_UR
                 "num_gpu": num_gpu,
             },
         },
-        timeout=180,
+        timeout=300 if prefix_cached else 180,
     )
     response.raise_for_status()
     return _build_result(response.json())
@@ -108,6 +116,7 @@ class _OllamaNode:
     url: str
     name: str
     num_gpu: int = -1  # -1 = Ollama auto (fills as much GPU as possible)
+    prefix_cached: bool = False
     lock: threading.Semaphore = field(default_factory=lambda: threading.Semaphore(1))
     busy: bool = False
     jobs_done: int = 0
@@ -119,11 +128,11 @@ class NodePool:
         self._cv = threading.Condition(threading.Lock())
         self._nodes.append(_OllamaNode(url=OLLAMA_URL, name="local", num_gpu=LOCAL_NUM_GPU))
 
-    def register(self, url: str, name: str, num_gpu: int = -1) -> str:
+    def register(self, url: str, name: str, num_gpu: int = -1, prefix_cached: bool = False) -> str:
         with self._cv:
             if any(n.url == url for n in self._nodes):
                 return "already_registered"
-            self._nodes.append(_OllamaNode(url=url, name=name, num_gpu=num_gpu))
+            self._nodes.append(_OllamaNode(url=url, name=name, num_gpu=num_gpu, prefix_cached=prefix_cached))
             return "registered"
 
     def _try_acquire(self) -> "_OllamaNode | None":
@@ -354,9 +363,9 @@ def _do_transfer(node_base_url: str) -> bool:
 
 def call_ollama(prompt: str, temperature: float = 1.0) -> OllamaResult:
     with node_pool.acquire() as node:
-        return _request_single(prompt, temperature, url=node.url, num_gpu=node.num_gpu)
+        return _request_single(prompt, temperature, url=node.url, num_gpu=node.num_gpu, prefix_cached=node.prefix_cached)
 
 
 def call_ollama_batch(messages: list[str], temperature: float = 1.0) -> OllamaResult:
     with node_pool.acquire() as node:
-        return _request_batch(messages, temperature, url=node.url, num_gpu=node.num_gpu)
+        return _request_batch(messages, temperature, url=node.url, num_gpu=node.num_gpu, prefix_cached=node.prefix_cached)
