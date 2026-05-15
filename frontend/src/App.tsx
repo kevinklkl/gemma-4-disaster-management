@@ -4,6 +4,7 @@
  */
 
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
+import { Home } from './pages/Home';
 import { Dashboard } from './pages/Dashboard';
 import { Inbox } from './pages/Inbox';
 import { DonorView } from './pages/DonorView';
@@ -17,7 +18,8 @@ export default function App() {
   return (
     <Router>
       <Routes>
-        <Route path="/" element={<Dashboard />} />
+        <Route path="/" element={<Home />} />
+        <Route path="/pulso" element={<Dashboard />} />
         <Route path="/inbox" element={<Inbox />} />
         <Route path="/coverage" element={<Coverage />} />
         <Route path="/sagot" element={<Sagot />} />

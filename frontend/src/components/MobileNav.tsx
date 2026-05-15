@@ -9,7 +9,7 @@ type Tab = {
 };
 
 const TABS: Tab[] = [
-  { to: "/",       label: "pulso",   isActive: p => p === "/",               icon: <Activity className="w-6 h-6" strokeWidth={1.75} /> },
+  { to: "/pulso",  label: "pulso",   isActive: p => p === "/pulso",          icon: <Activity className="w-6 h-6" strokeWidth={1.75} /> },
   { to: "/inbox",  label: "inbox",   isActive: p => p === "/inbox",          icon: <InboxIcon className="w-6 h-6" strokeWidth={1.75} /> },
   { to: "/intake", label: "intake",  isActive: p => p.startsWith("/intake"), icon: <PlusCircle className="w-6 h-6" strokeWidth={1.75} /> },
   { to: "/profile",label: "profile", isActive: p => p === "/profile",        icon: <User className="w-6 h-6" strokeWidth={1.75} /> },
