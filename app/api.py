@@ -16,7 +16,7 @@ from fastapi import FastAPI, Request, HTTPException, BackgroundTasks, WebSocket,
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-from engine.ollama_client import call_ollama, call_ollama_batch, node_pool, _request_single, _request_batch, MODEL_NAME, LOCAL_NUM_GPU, transfer_model_to_node
+from engine.ollama_client import call_ollama, call_ollama_batch, node_pool, _request_single, _request_batch, MODEL_NAME, ANDROID_MODEL_NAME, LOCAL_NUM_GPU, transfer_model_to_node
 from engine.extraction.parser import parse_response
 from engine.extraction.validator import validate_and_canonicalize
 from prompts.extraction_prompt import build_extraction_prompt, _get_shared_prefix
@@ -136,8 +136,10 @@ async def _startup():
     global _event_loop, _zeroconf, _zeroconf_info
     _event_loop = asyncio.get_event_loop()
 
-    # Requeue any messages left as needs_processing from before a server restart
+    # Reset any messages left mid-processing from a previous crash, then requeue all pending
     with get_db() as conn:
+        conn.execute("UPDATE messages SET status = 'needs_processing' WHERE status = 'processing'")
+        conn.commit()
         stuck = conn.execute(
             "SELECT id, message FROM messages WHERE status = 'needs_processing'"
         ).fetchall()
@@ -200,41 +202,45 @@ def row_to_message(r: sqlite3.Row) -> dict:
 
 
 
+_json_decoder = json.JSONDecoder(strict=False)
+
+
 def _parse_batch_response(text: str) -> list:
     """Extract a JSON array from a free-text batch response."""
-    original = text
     text = text.strip()
-    
+
     # Strip markdown fences
     if text.startswith("```json"): text = text[7:]
     if text.startswith("```"): text = text[3:]
     if text.endswith("```"): text = text[:-3]
     text = text.strip()
-    
-    # Look for the outermost Object {}
+
     start = text.find("{")
-    end = text.rfind("}")
-    
-    if start == -1 or end == -1 or end <= start:
-        print(f"[batch parse] no object found in response.")
+    if start == -1:
+        print(f"[batch parse] no object found in response. Raw ({len(text)} chars): {repr(text[:300])}")
         return []
-        
+
+    # raw_decode parses the first complete JSON object and ignores trailing
+    # garbage (e.g. a stray second object the model appended after closing "results").
+    # strict=False tolerates raw control characters copied from SMS text.
     try:
-        parsed = json.loads(text[start:end + 1])
+        parsed, _ = _json_decoder.raw_decode(text, start)
     except json.JSONDecodeError as e:
-        # Output was truncated mid-stream — try closing the array/object to salvage
-        # complete items. text[start:end+1] ends at the last valid '}', so appending
-        # ']}' closes the results array and outer object.
-        try:
-            parsed = json.loads(text[start:end + 1] + "]}")
-        except json.JSONDecodeError:
+        # Truncated mid-stream — try closing the array and object to salvage complete items.
+        end = text.rfind("}")
+        if end != -1 and end > start:
+            try:
+                parsed, _ = _json_decoder.raw_decode(text[start:end + 1] + "]}", 0)
+            except json.JSONDecodeError:
+                print(f"[batch parse] JSON error: {e} — response snippet: {repr(text[start:start+300])}")
+                return []
+        else:
             print(f"[batch parse] JSON error: {e} — response snippet: {repr(text[start:start+300])}")
             return []
-        
-    # Extract the array from our "results" wrapper
+
     if isinstance(parsed, dict) and "results" in parsed:
         return parsed["results"]
-        
+
     return []
 
 def _run_gemma_bg(msg_id: int, content: str):
@@ -244,10 +250,10 @@ def _run_gemma_bg(msg_id: int, content: str):
         with get_db() as conn:
             rows = conn.execute(
                 "SELECT id, message FROM messages WHERE status = 'needs_processing' LIMIT ?",
-                (BATCH_SIZE,)
+                (node.max_batch,)
             ).fetchall()
             if not rows:
-                return  # Another worker already processed everything
+                return
             all_ids = [r["id"] for r in rows]
             all_contents = [r["message"] for r in rows]
             conn.execute(
@@ -263,7 +269,7 @@ def _run_gemma_bg(msg_id: int, content: str):
         try:
             if len(all_ids) == 1:
                 t0 = time.perf_counter()
-                result = _request_single(build_extraction_prompt(all_contents[0]), temperature=0.1, url=node.url, num_gpu=node.num_gpu)
+                result = _request_single(build_extraction_prompt(all_contents[0]), temperature=0.1, url=node.url, num_gpu=node.num_gpu, prefix_cached=node.prefix_cached)
                 t1 = time.perf_counter()
                 data = validate_and_canonicalize(parse_response(result.response))
                 t2 = time.perf_counter()
@@ -278,7 +284,7 @@ def _run_gemma_bg(msg_id: int, content: str):
                 _broadcast_sync({"type": "processing_done", "msgId": str(all_ids[0]), "durationMs": duration_ms, "extractedData": data, "nodeName": node.name})
                 t4 = time.perf_counter()
                 print(
-                    f"[msg {all_ids[0]}] total={duration_ms}ms"
+                    f"[msg {all_ids[0]} @{node.name}] total={duration_ms}ms"
                     f"  ollama={1000*(t1-t0):.0f}ms"
                     f"  parse={1000*(t2-t1):.0f}ms"
                     f"  db={1000*(t3-t2):.0f}ms"
@@ -287,7 +293,7 @@ def _run_gemma_bg(msg_id: int, content: str):
                 )
             else:
                 t0 = time.perf_counter()
-                result = _request_batch(all_contents, temperature=0.0, url=node.url, num_gpu=node.num_gpu)
+                result = _request_batch(all_contents, temperature=0.0, url=node.url, num_gpu=node.num_gpu, prefix_cached=node.prefix_cached)
                 t1 = time.perf_counter()
                 items = _parse_batch_response(result.response)
                 items = [validate_and_canonicalize(item) for item in items]
@@ -308,7 +314,7 @@ def _run_gemma_bg(msg_id: int, content: str):
                 t3 = time.perf_counter()
                 filled = min(len(items), len(all_ids))
                 print(
-                    f"[batch {filled}/{len(all_ids)} msgs] total={duration_ms}ms"
+                    f"[batch {filled}/{len(all_ids)} @{node.name}] total={duration_ms}ms"
                     f"  ollama={1000*(t1-t0):.0f}ms"
                     f"  parse={1000*(t2-t1):.0f}ms"
                     f"  db={1000*(t3-t2):.0f}ms"
@@ -363,6 +369,19 @@ def _run_gemma_batch(msg_ids: list, contents: list):
         t0 = time.perf_counter()
         node_name = "local"
         with node_pool.acquire() as node:
+            cap = node.max_batch
+            if len(msg_ids) > cap:
+                requeue_ids = msg_ids[cap:]
+                msg_ids  = msg_ids[:cap]
+                contents = contents[:cap]
+                with get_db() as conn:
+                    conn.execute(
+                        f"UPDATE messages SET status='needs_processing' WHERE id IN ({','.join('?'*len(requeue_ids))})",
+                        requeue_ids,
+                    )
+                    conn.commit()
+                threading.Thread(target=_run_gemma_bg, args=(requeue_ids[0], ""), daemon=True).start()
+            n = len(msg_ids)
             result = _request_batch(contents, temperature=0.0, url=node.url, num_gpu=node.num_gpu)
             node_name = node.name
         t1 = time.perf_counter()
@@ -678,6 +697,7 @@ async def update_packing(message_id: int, body: PackingUpdate):
 
 class NodeRegistration(BaseModel):
     name: str = ""
+    android: bool = False
 
 
 def _detect_num_gpu(ip: str) -> int:
@@ -742,12 +762,12 @@ def _detect_num_gpu(ip: str) -> int:
     return LOCAL_NUM_GPU
 
 
-def _transfer_then_register(ip: str, node_name: str):
+def _transfer_then_register(ip: str, node_name: str, android: bool = False):
     """Background task: push the model to a node that lacks it, then register it."""
     base_url = f"http://{ip}:11434"
     if transfer_model_to_node(base_url):
         num_gpu = _detect_num_gpu(ip)
-        status = node_pool.register(f"{base_url}/api/generate", node_name, num_gpu=num_gpu, prefix_cached=True)
+        status = node_pool.register(f"{base_url}/api/generate", node_name, num_gpu=num_gpu, prefix_cached=True, android=android)
         print(f"[nodes] {ip} ({node_name}) auto-registered after transfer, status={status}")
     else:
         print(f"[nodes] model transfer to {ip} ({node_name}) failed — node not added")
@@ -772,7 +792,8 @@ async def register_node(request: Request, body: NodeRegistration):
         )
         resp.raise_for_status()
         installed = [m["name"] for m in resp.json().get("models", [])]
-        has_model = any(MODEL_NAME in m for m in installed)
+        is_android = any(ANDROID_MODEL_NAME in m for m in installed)
+        has_model = is_android or any(MODEL_NAME in m for m in installed)
     except Exception:
         return {"ok": False, "status": "unreachable", "nodes": node_pool.list_nodes()}
 
@@ -780,15 +801,19 @@ async def register_node(request: Request, body: NodeRegistration):
 
     if not has_model:
         threading.Thread(
-            target=_transfer_then_register, args=(ip, node_name), daemon=True
+            target=_transfer_then_register, args=(ip, node_name, is_android), daemon=True
         ).start()
         return {"ok": True, "status": "transferring", "nodes": node_pool.list_nodes()}
 
-    num_gpu = await asyncio.to_thread(_detect_num_gpu, ip)
-    print(f"[nodes] {ip} ({node_name}) detected num_gpu={num_gpu}")
+    # Android nodes use LiteRT — num_gpu is irrelevant and the probe crashes LiteRT
+    if is_android:
+        num_gpu = -1
+    else:
+        num_gpu = await asyncio.to_thread(_detect_num_gpu, ip)
+    print(f"[nodes] {ip} ({node_name}) detected num_gpu={num_gpu}, android={is_android}")
 
     url = f"http://{ip}:11434/api/generate"
-    status = node_pool.register(url, node_name, num_gpu=num_gpu, prefix_cached=True)
+    status = node_pool.register(url, node_name, num_gpu=num_gpu, prefix_cached=True, android=is_android)
     return {"ok": True, "status": status, "nodes": node_pool.list_nodes(), "cache_prompt": _get_shared_prefix()}
 
 
@@ -832,7 +857,8 @@ async def probe_node(request: Request):
         )
         resp.raise_for_status()
         installed = [m["name"] for m in resp.json().get("models", [])]
-        has_model = any(MODEL_NAME in m for m in installed)
+        is_android = any(ANDROID_MODEL_NAME in m for m in installed)
+        has_model = is_android or any(MODEL_NAME in m for m in installed)
     except Exception:
         return {"joined": False}
 
@@ -842,7 +868,7 @@ async def probe_node(request: Request):
         ).start()
         return {"joined": False, "transferring": True}
 
-    node_pool.register(url, ip, num_gpu=-1)
+    node_pool.register(url, ip, num_gpu=-1, prefix_cached=True, android=is_android)
     return {"joined": True, "isHost": False, "nodes": node_pool.list_nodes()}
 
 

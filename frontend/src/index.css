@@ -107,6 +107,8 @@
 }
 
 :root {
+  color-scheme: light;
+
   /* motion */
   --ease-out:   cubic-bezier(0.22, 0.61, 0.36, 1);
   --ease-in:    cubic-bezier(0.45, 0, 0.55, 1);
