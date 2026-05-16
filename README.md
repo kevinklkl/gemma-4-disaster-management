@@ -1,4 +1,4 @@
-# Bayanihan-AI
+# akbay
 
 Offline disaster supply-demand matching and relief logistics manager assistant using Gemma 4 via Ollama.
 
@@ -21,7 +21,7 @@ The Philippines is situated in one of the most disaster-prone regions of the wor
 
 ## Solution
 
-Bayanihan-AI acts as a disaster relief logistics manager assistant, offering a three-pronged approach:
+akbay acts as a disaster relief logistics manager assistant, offering a three-pronged approach:
 
 1. **Data Extraction**:
    Use Gemma to process all types of incoming donations. This includes processing text inputs, images of receipts or goods (via visual models if integrated), and audio (transcribing via models like Whisper, since during fast-paced situations users often prefer voice recordings) to extract actionable data.

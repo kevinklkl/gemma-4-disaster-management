@@ -1,4 +1,4 @@
-# Project Bayanihan-AI: Architecture & Feedback
+# Project akbay: Architecture & Feedback
 
 ## Feedback on the "Needs-Centric Focus" Operational Plan
 
