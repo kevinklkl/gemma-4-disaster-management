@@ -1,5 +1,5 @@
 import { Link, useLocation } from "react-router-dom";
-import { PlusCircle, Activity, User, Inbox as InboxIcon } from "lucide-react";
+import { PlusCircle, Activity, MessageSquare, Network as NetworkIcon } from "lucide-react";
 
 type Tab = {
   to: string;
@@ -9,10 +9,10 @@ type Tab = {
 };
 
 const TABS: Tab[] = [
-  { to: "/pulso",  label: "pulso",   isActive: p => p === "/pulso",          icon: <Activity className="w-6 h-6" strokeWidth={1.75} /> },
-  { to: "/inbox",  label: "inbox",   isActive: p => p === "/inbox",          icon: <InboxIcon className="w-6 h-6" strokeWidth={1.75} /> },
-  { to: "/intake", label: "intake",  isActive: p => p.startsWith("/intake"), icon: <PlusCircle className="w-6 h-6" strokeWidth={1.75} /> },
-  { to: "/profile",label: "profile", isActive: p => p === "/profile",        icon: <User className="w-6 h-6" strokeWidth={1.75} /> },
+  { to: "/pulso",   label: "pulso",   isActive: p => p === "/pulso",           icon: <Activity className="w-6 h-6" strokeWidth={1.75} /> },
+  { to: "/network", label: "network", isActive: p => p === "/network",         icon: <NetworkIcon className="w-6 h-6" strokeWidth={1.75} /> },
+  { to: "/intake",  label: "intake",  isActive: p => p.startsWith("/intake"),  icon: <PlusCircle className="w-6 h-6" strokeWidth={1.75} /> },
+  { to: "/tickets", label: "tickets", isActive: p => p === "/tickets",         icon: <MessageSquare className="w-6 h-6" strokeWidth={1.75} /> },
 ];
 
 export function MobileNav() {

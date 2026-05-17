@@ -4,7 +4,7 @@ import { ShieldCheck, AlertCircle } from "lucide-react";
 import { useAuth } from "../context/AuthContext";
 import { Brand } from "../components/Brand";
 
-const API_BASE = import.meta.env.VITE_API_URL || "http://localhost:8000";
+const API_BASE = import.meta.env.VITE_API_URL || `http://${window.location.hostname}:8000`;
 
 export function Setup() {
   const { user } = useAuth();

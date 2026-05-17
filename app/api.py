@@ -280,6 +280,8 @@ def init_db():
         existing_u = {row[1] for row in conn.execute("PRAGMA table_info(users)")}
         if "available" not in existing_u:
             conn.execute("ALTER TABLE users ADD COLUMN available INTEGER DEFAULT 0")
+        if "full_name" not in existing_u:
+            conn.execute("ALTER TABLE users ADD COLUMN full_name TEXT")
         # Ensure the built-in host admin account exists so the host token has a real DB row
         if not conn.execute("SELECT id FROM users WHERE username = '_host'").fetchone():
             conn.execute(
@@ -1171,6 +1173,12 @@ class CreateUserRequest(BaseModel):
     role: str = "responder"
 
 
+class SignupRequest(BaseModel):
+    full_name: str
+    username: str
+    password: str
+
+
 class TicketReplyUpdate(BaseModel):
     reply_draft: str
 
@@ -1221,12 +1229,54 @@ def auth_me(user: dict = Depends(require_user)):
     return {"id": user["sub"], "username": user["username"], "role": user["role"], "available": available}
 
 
+@app.post("/auth/logout")
+def auth_logout(user: dict = Depends(require_user)):
+    user_id = int(user["sub"])
+    if user_id > 0:
+        with get_db() as conn:
+            conn.execute(
+                "UPDATE messages SET ticket_status = 'queued', assigned_to = NULL "
+                "WHERE assigned_to = ? AND ticket_status = 'pending_approval'",
+                (user_id,),
+            )
+            conn.commit()
+        with get_users_db() as conn:
+            conn.execute("UPDATE users SET available = 0 WHERE id = ?", (user_id,))
+            conn.commit()
+        _flush_ticket_queue()
+    return {"ok": True}
+
+
 @app.get("/auth/setup-needed")
 def auth_setup_needed():
     """Frontend uses this to decide whether to show the setup wizard."""
     with get_users_db() as conn:
         count = conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
     return {"setupNeeded": count == 0}
+
+
+@app.post("/auth/signup")
+def auth_signup(body: SignupRequest):
+    full_name = body.full_name.strip()
+    username = body.username.strip()
+    if not full_name:
+        raise HTTPException(status_code=400, detail="Full name is required")
+    if len(body.password) < 6:
+        raise HTTPException(status_code=400, detail="Password must be at least 6 characters")
+    pw_hash = _hash_password(body.password)
+    try:
+        with get_users_db() as conn:
+            conn.execute(
+                "INSERT INTO users (username, password_hash, role, full_name, created_at, available) VALUES (?, ?, 'responder', ?, ?, 1)",
+                (username, pw_hash, full_name, datetime.now(timezone.utc).isoformat()),
+            )
+            conn.commit()
+            user = conn.execute("SELECT id, username, role FROM users WHERE username = ?", (username,)).fetchone()
+    except sqlite3.IntegrityError:
+        raise HTTPException(status_code=409, detail="Username already taken")
+    _flush_ticket_queue()
+    token = _create_token(user["id"], user["username"], user["role"])
+    return {"token": token, "username": user["username"], "role": user["role"]}
 
 
 @app.get("/auth/host-token")

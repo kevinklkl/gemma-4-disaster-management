@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { Link } from "react-router-dom";
 import {
   Plus,
@@ -14,9 +15,23 @@ import {
   Github,
   Linkedin,
   User,
+  Menu,
+  X,
+  MessageSquare,
 } from "lucide-react";
 import { TopNav } from "../components/TopNav";
 import { Brand } from "../components/Brand";
+
+type NavLink = { to: string; label: string; icon: React.ReactNode };
+const NAV_LINKS: NavLink[] = [
+  { to: "/intake",     label: "intake",      icon: <Plus className="w-5 h-5" strokeWidth={1.75} /> },
+  { to: "/pulso",      label: "pulso",       icon: <Activity className="w-5 h-5" strokeWidth={1.75} /> },
+  { to: "/inbox",      label: "inbox",       icon: <InboxIcon className="w-5 h-5" strokeWidth={1.75} /> },
+  { to: "/coverage",   label: "coverage",    icon: <MapIcon className="w-5 h-5" strokeWidth={1.75} /> },
+  { to: "/tickets",    label: "tickets",     icon: <MessageSquare className="w-5 h-5" strokeWidth={1.75} /> },
+  { to: "/history",    label: "history",     icon: <Clock className="w-5 h-5" strokeWidth={1.75} /> },
+  { to: "/donor-view", label: "donor view",  icon: <HeartHandshake className="w-5 h-5" strokeWidth={1.75} /> },
+];
 
 type Step = {
   n: number;
@@ -97,9 +112,63 @@ const DEVS: Dev[] = [
 ];
 
 export function Home() {
+  const [menuOpen, setMenuOpen] = useState(false);
+
   return (
     <div className="flex flex-col min-h-screen" style={{ background: "var(--color-paper)" }}>
       <TopNav />
+
+      {/* mobile hamburger button */}
+      <button
+        className="md:hidden fixed top-4 right-4 z-50 flex items-center justify-center w-10 h-10 rounded-full shadow-lg"
+        style={{ background: "var(--color-dagat)", color: "var(--color-bone)" }}
+        onClick={() => setMenuOpen(true)}
+        aria-label="open menu"
+      >
+        <Menu className="w-5 h-5" strokeWidth={1.75} />
+      </button>
+
+      {/* mobile full-screen overlay menu */}
+      {menuOpen && (
+        <div
+          className="md:hidden fixed inset-0 z-50 flex flex-col"
+          style={{ background: "var(--color-dagat)" }}
+        >
+          <div className="flex items-center justify-between px-6 pt-6 pb-4">
+            <Brand variant="on-dark" size={36} showWordmark linkTo={null} />
+            <button
+              onClick={() => setMenuOpen(false)}
+              aria-label="close menu"
+              style={{ color: "var(--color-bone)" }}
+            >
+              <X className="w-6 h-6" strokeWidth={1.75} />
+            </button>
+          </div>
+
+          <nav className="flex flex-col px-4 gap-1 flex-1 overflow-y-auto">
+            {NAV_LINKS.map(l => (
+              <Link
+                key={l.to}
+                to={l.to}
+                onClick={() => setMenuOpen(false)}
+                className="flex items-center gap-4 px-4 py-4 rounded-xl active:scale-[0.98] transition-transform"
+                style={{ color: "var(--color-bone)" }}
+              >
+                <span style={{ color: "rgba(251,246,232,0.7)" }}>{l.icon}</span>
+                <span className="font-display font-bold text-lg" style={{ letterSpacing: "-0.01em" }}>
+                  {l.label}
+                </span>
+              </Link>
+            ))}
+          </nav>
+
+          <div className="px-8 py-6">
+            <p className="font-mono text-xs" style={{ color: "rgba(251,246,232,0.4)", letterSpacing: "0.02em" }}>
+              beside, not above.
+            </p>
+          </div>
+        </div>
+      )}
 
       <main className="flex-1 w-full">
         {/* hero */}

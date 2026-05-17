@@ -1,5 +1,5 @@
 import { Link, useLocation } from "react-router-dom";
-import { Plus, Home as HomeIcon, Activity, Inbox as InboxIcon, Map as MapIcon, MessageSquare, Clock, HeartHandshake, Settings } from "lucide-react";
+import { Plus, Home as HomeIcon, Activity, Network as NetworkIcon, Map as MapIcon, MessageSquare, Clock, HeartHandshake, Settings } from "lucide-react";
 import { Brand } from "./Brand";
 import { useAuth } from "../context/AuthContext";
 
@@ -13,7 +13,7 @@ type Tab = {
 const TABS: Tab[] = [
   { to: "/",           label: "home",       icon: <HomeIcon className="w-4 h-4" strokeWidth={1.75} /> },
   { to: "/pulso",      label: "pulso",      icon: <Activity className="w-4 h-4" strokeWidth={1.75} /> },
-  { to: "/inbox",      label: "inbox",      icon: <InboxIcon className="w-4 h-4" strokeWidth={1.75} /> },
+  { to: "/network",    label: "network",    icon: <NetworkIcon className="w-4 h-4" strokeWidth={1.75} /> },
   { to: "/coverage",   label: "coverage",   icon: <MapIcon className="w-4 h-4" strokeWidth={1.75} /> },
   { to: "/tickets",    label: "tickets",    icon: <MessageSquare className="w-4 h-4" strokeWidth={1.75} /> },
   { to: "/history",    label: "history",    icon: <Clock className="w-4 h-4" strokeWidth={1.75} /> },

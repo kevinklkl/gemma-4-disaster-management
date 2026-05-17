@@ -30,7 +30,7 @@ function decodeTokenPayload(token: string): AuthUser | null {
   }
 }
 
-const API_BASE = import.meta.env.VITE_API_URL || "http://localhost:8000";
+const API_BASE = import.meta.env.VITE_API_URL || `http://${window.location.hostname}:8000`;
 
 const isHostDevice =
   window.location.hostname === "localhost" ||
@@ -116,6 +116,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }
 
   function logout() {
+    const t = localStorage.getItem("akbay_token");
+    if (t) {
+      fetch(`${API_BASE}/auth/logout`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${t}` },
+      }).catch(() => {});
+    }
     localStorage.removeItem("akbay_token");
     setToken(null);
     setUser(null);
