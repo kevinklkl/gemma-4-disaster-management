@@ -1,25 +1,32 @@
 import { Link, useLocation } from "react-router-dom";
-import { Plus, Home as HomeIcon, Activity, Inbox as InboxIcon, Map as MapIcon, Reply, Clock, HeartHandshake } from "lucide-react";
+import { Plus, Home as HomeIcon, Activity, Inbox as InboxIcon, Map as MapIcon, MessageSquare, Clock, HeartHandshake, Settings } from "lucide-react";
 import { Brand } from "./Brand";
+import { useAuth } from "../context/AuthContext";
 
 type Tab = {
   to: string;
   label: string;
   icon: React.ReactNode;
+  adminOnly?: boolean;
 };
 
 const TABS: Tab[] = [
-  { to: "/",         label: "home",     icon: <HomeIcon className="w-4 h-4" strokeWidth={1.75} /> },
-  { to: "/pulso",    label: "pulso",    icon: <Activity className="w-4 h-4" strokeWidth={1.75} /> },
-  { to: "/inbox",    label: "inbox",    icon: <InboxIcon className="w-4 h-4" strokeWidth={1.75} /> },
-  { to: "/coverage", label: "coverage", icon: <MapIcon className="w-4 h-4" strokeWidth={1.75} /> },
-  { to: "/sagot",    label: "sagot",    icon: <Reply className="w-4 h-4" strokeWidth={1.75} /> },
-  { to: "/history",  label: "history",  icon: <Clock className="w-4 h-4" strokeWidth={1.75} /> },
+  { to: "/",           label: "home",       icon: <HomeIcon className="w-4 h-4" strokeWidth={1.75} /> },
+  { to: "/pulso",      label: "pulso",      icon: <Activity className="w-4 h-4" strokeWidth={1.75} /> },
+  { to: "/inbox",      label: "inbox",      icon: <InboxIcon className="w-4 h-4" strokeWidth={1.75} /> },
+  { to: "/coverage",   label: "coverage",   icon: <MapIcon className="w-4 h-4" strokeWidth={1.75} /> },
+  { to: "/tickets",    label: "tickets",    icon: <MessageSquare className="w-4 h-4" strokeWidth={1.75} /> },
+  { to: "/history",    label: "history",    icon: <Clock className="w-4 h-4" strokeWidth={1.75} /> },
   { to: "/donor-view", label: "donor view", icon: <HeartHandshake className="w-4 h-4" strokeWidth={1.75} /> },
+  { to: "/settings",   label: "settings",   icon: <Settings className="w-4 h-4" strokeWidth={1.75} />, adminOnly: true },
 ];
 
 export function TopNav({ hideNewReport = false }: { hideNewReport?: boolean } = {}) {
   const { pathname } = useLocation();
+  const { user } = useAuth();
+  const isAdmin = user?.role === "admin";
+
+  const visibleTabs = TABS.filter(t => !t.adminOnly || isAdmin);
 
   return (
     <header
@@ -34,7 +41,7 @@ export function TopNav({ hideNewReport = false }: { hideNewReport?: boolean } = 
       </div>
 
       <nav className="hidden md:flex gap-0.5 flex-1">
-        {TABS.map(t => {
+        {visibleTabs.map(t => {
           const active = t.to === "/" ? pathname === "/" : pathname.startsWith(t.to);
           return (
             <Link

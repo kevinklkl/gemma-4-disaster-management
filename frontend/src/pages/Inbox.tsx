@@ -283,10 +283,28 @@ export function Inbox() {
       .catch(console.error);
   };
 
+  const saveTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
+
+  const scheduleSave = (id: string, extractedData: any) => {
+    const existing = saveTimers.current.get(id);
+    if (existing) clearTimeout(existing);
+    const timer = setTimeout(() => {
+      fetch(`/api/messages/${id}/extracted`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ extracted_data: extractedData }),
+      }).catch(() => {});
+      saveTimers.current.delete(id);
+    }, 600);
+    saveTimers.current.set(id, timer);
+  };
+
   const handleUpdateField = (id: string, field: string, value: any) => {
     setMessages(prev => prev.map(m => {
       if (m.id === id && m.extractedData) {
-        return { ...m, extractedData: { ...m.extractedData, [field]: value } };
+        const updated = { ...m.extractedData, [field]: value };
+        scheduleSave(id, updated);
+        return { ...m, extractedData: updated };
       }
       return m;
     }));
@@ -297,7 +315,9 @@ export function Inbox() {
       if (m.id === id && m.extractedData?.items) {
         const newItems = [...m.extractedData.items];
         newItems[index] = { ...newItems[index], [field]: value };
-        return { ...m, extractedData: { ...m.extractedData, items: newItems } };
+        const updated = { ...m.extractedData, items: newItems };
+        scheduleSave(id, updated);
+        return { ...m, extractedData: updated };
       }
       return m;
     }));
@@ -306,7 +326,9 @@ export function Inbox() {
   const handleRemoveItem = (id: string, index: number) => {
     setMessages(prev => prev.map(m => {
       if (m.id === id && m.extractedData?.items) {
-        return { ...m, extractedData: { ...m.extractedData, items: m.extractedData.items.filter((_, i) => i !== index) } };
+        const updated = { ...m.extractedData, items: m.extractedData.items.filter((_, i) => i !== index) };
+        scheduleSave(id, updated);
+        return { ...m, extractedData: updated };
       }
       return m;
     }));
@@ -324,7 +346,9 @@ export function Inbox() {
   const handleAddItem = (id: string) => {
     setMessages(prev => prev.map(m => {
       if (m.id === id && m.extractedData) {
-        return { ...m, extractedData: { ...m.extractedData, items: [...(m.extractedData.items || []), { name: "", qty: 1 }] } };
+        const updated = { ...m.extractedData, items: [...(m.extractedData.items || []), { name: "", qty: 1 }] };
+        scheduleSave(id, updated);
+        return { ...m, extractedData: updated };
       }
       return m;
     }));

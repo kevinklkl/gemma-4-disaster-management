@@ -24,7 +24,13 @@ export type ApiMessage = {
     urgency: string;
     persons: number;
     items: ApiExtractedItem[];
+    reply_needed?: boolean;
+    reply_draft?: string | null;
   } | null;
+  replyNeeded?: boolean;
+  replyDraft?: string | null;
+  assignedTo?: number | null;
+  ticketStatus?: string | null;
 };
 
 export type ItemSource = {

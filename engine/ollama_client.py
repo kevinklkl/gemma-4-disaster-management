@@ -7,7 +7,7 @@ import threading
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 import requests
-from prompts.extraction_prompt import build_batch_prompt, _get_shared_prefix
+from prompts.extraction_prompt import build_batch_prompt, _get_shared_prefix, _get_batch_prefix
 
 OLLAMA_URL = "http://localhost:11434/api/generate"
 MODEL_NAME = "gemma4-e2b-unsloth"
@@ -86,7 +86,7 @@ def _request_single(prompt: str, temperature: float, url: str = OLLAMA_URL, num_
 def _request_batch(messages: list[str], temperature: float, url: str = OLLAMA_URL, num_gpu: int = LOCAL_NUM_GPU, prefix_cached: bool = False, model_name: str = MODEL_NAME) -> OllamaResult:
     prompt = build_batch_prompt(messages)
     if prefix_cached:
-        shared = _get_shared_prefix()
+        shared = _get_batch_prefix()
         if prompt.startswith(shared):
             prompt = prompt[len(shared):]
     response = requests.post(
@@ -138,11 +138,11 @@ class NodePool:
                 if node.url == url:
                     node.android = android
                     node.model_name = ANDROID_MODEL_NAME if android else MODEL_NAME
-                    node.max_batch = 3 if android else 10
+                    node.max_batch = 2 if android else 10
                     node.prefix_cached = prefix_cached
                     return "already_registered"
             model = ANDROID_MODEL_NAME if android else MODEL_NAME
-            max_batch = 3 if android else 10
+            max_batch = 2 if android else 10
             self._nodes.append(_OllamaNode(url=url, name=name, num_gpu=num_gpu, prefix_cached=prefix_cached, model_name=model, android=android, max_batch=max_batch))
             return "registered"
 

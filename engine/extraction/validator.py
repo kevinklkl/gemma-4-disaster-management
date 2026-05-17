@@ -55,6 +55,7 @@ class _RawExtraction(BaseModel):
     urgency: Optional[str] = Field(None, alias="urg")
     persons: Optional[int] = Field(None, alias="pax")
     items: list[_RawItem] = Field(default_factory=list)
+    reply_draft: Optional[str] = Field(None, alias="rep")
 
     @field_validator("persons", mode="before")
     @classmethod
@@ -136,10 +137,16 @@ def validate_and_canonicalize(payload: dict) -> dict:
     if isinstance(raw.location, str) and raw.location.strip():
         location = raw.location.strip()
 
+    reply_draft: Optional[str] = None
+    if isinstance(raw.reply_draft, str) and raw.reply_draft.strip():
+        reply_draft = raw.reply_draft.strip()
+
     result = {
         "location": location,
         "urgency": _clean_urgency(raw.urgency),
         "persons": raw.persons,
         "items": cleaned_items,
+        "reply_draft": reply_draft,
+        "reply_needed": reply_draft is not None,
     }
     return estimate_needs(result)

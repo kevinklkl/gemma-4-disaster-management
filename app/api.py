@@ -1,8 +1,11 @@
 import asyncio
 import csv
+import hashlib
+import hmac
 import ipaddress
 import json
 import os
+import secrets
 import socket
 import sqlite3
 import threading
@@ -12,14 +15,22 @@ from zeroconf import ServiceInfo, Zeroconf
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from typing import Any, List, Optional
-from fastapi import FastAPI, Request, HTTPException, BackgroundTasks, WebSocket, WebSocketDisconnect, Response
+from fastapi import FastAPI, Request, HTTPException, BackgroundTasks, WebSocket, WebSocketDisconnect, Response, Depends
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel
 
 from engine.ollama_client import call_ollama, call_ollama_batch, node_pool, _request_single, _request_batch, MODEL_NAME, ANDROID_MODEL_NAME, LOCAL_NUM_GPU, transfer_model_to_node
 from engine.extraction.parser import parse_response
 from engine.extraction.validator import validate_and_canonicalize
+from engine.extraction.reply_checker import check_reply_needed
 from prompts.extraction_prompt import build_extraction_prompt, _get_shared_prefix
+
+try:
+    import jwt as _jwt
+    _JWT_AVAILABLE = True
+except ImportError:
+    _JWT_AVAILABLE = False
 
 app = FastAPI()
 
@@ -58,9 +69,226 @@ app.add_middleware(
 )
 
 DB_PATH = "data/inbox.db"
+USERS_DB_PATH = "data/users.db"
+
+def _load_or_create_secret() -> str:
+    env = os.getenv("AUTH_SECRET_KEY")
+    if env:
+        return env
+    path = "data/auth_secret.key"
+    os.makedirs("data", exist_ok=True)
+    try:
+        with open(path) as f:
+            return f.read().strip()
+    except FileNotFoundError:
+        s = secrets.token_hex(32)
+        with open(path, "w") as f:
+            f.write(s)
+        return s
+
+AUTH_SECRET = _load_or_create_secret()
+TOKEN_EXPIRE_SECONDS = 7 * 24 * 3600
+_http_bearer = HTTPBearer(auto_error=False)
+
+TICKET_CAP = 3
+URGENCY_ORDER = {"critical": 0, "high": 1, "medium": 2, "low": 3}
+
+
+def _hash_password(password: str) -> str:
+    salt = secrets.token_bytes(32)
+    key = hashlib.pbkdf2_hmac("sha256", password.encode(), salt, 200_000)
+    return salt.hex() + ":" + key.hex()
+
+
+def _verify_password(password: str, stored: str) -> bool:
+    try:
+        salt_hex, key_hex = stored.split(":", 1)
+        salt = bytes.fromhex(salt_hex)
+        key = hashlib.pbkdf2_hmac("sha256", password.encode(), salt, 200_000)
+        return hmac.compare_digest(key.hex(), key_hex)
+    except Exception:
+        return False
+
+
+def _create_token(user_id: int, username: str, role: str) -> str:
+    payload = {
+        "sub": str(user_id),
+        "username": username,
+        "role": role,
+        "exp": int(time.time()) + TOKEN_EXPIRE_SECONDS,
+    }
+    if _JWT_AVAILABLE:
+        return _jwt.encode(payload, AUTH_SECRET, algorithm="HS256")
+    # Fallback HMAC token if PyJWT not installed
+    import base64
+    body = base64.urlsafe_b64encode(json.dumps(payload).encode()).decode()
+    sig = hmac.new(AUTH_SECRET.encode(), body.encode(), hashlib.sha256).hexdigest()
+    return f"{body}.{sig}"
+
+
+def _decode_token(token: str) -> dict | None:
+    try:
+        if _JWT_AVAILABLE:
+            return _jwt.decode(token, AUTH_SECRET, algorithms=["HS256"])
+        import base64
+        body, sig = token.rsplit(".", 1)
+        expected = hmac.new(AUTH_SECRET.encode(), body.encode(), hashlib.sha256).hexdigest()
+        if not hmac.compare_digest(sig, expected):
+            return None
+        payload = json.loads(base64.urlsafe_b64decode(body + "=="))
+        if payload.get("exp", 0) < time.time():
+            return None
+        return payload
+    except Exception:
+        return None
+
+
+def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(_http_bearer)) -> dict | None:
+    if credentials is None:
+        return None
+    return _decode_token(credentials.credentials)
+
+
+def require_user(user: dict | None = Depends(get_current_user)) -> dict:
+    if user is None:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    return user
+
+
+def require_admin(user: dict | None = Depends(get_current_user)) -> dict:
+    if user is None:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    if user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required")
+    return user
+
+
+def _assign_ticket() -> int | None:
+    """Assign to the available responder with the fewest open tickets (under TICKET_CAP).
+    Returns user_id or None if all responders are at capacity or none are available.
+    """
+    with get_users_db() as uconn:
+        responders = [r["id"] for r in uconn.execute(
+            "SELECT id FROM users WHERE is_active = 1 AND available = 1 ORDER BY id ASC"
+        ).fetchall()]
+    if not responders:
+        return None
+
+    with get_db() as conn:
+        rows = conn.execute(
+            f"SELECT assigned_to, COUNT(*) as cnt FROM messages "
+            f"WHERE ticket_status = 'pending_approval' "
+            f"AND assigned_to IN ({','.join('?' * len(responders))}) "
+            f"GROUP BY assigned_to",
+            responders,
+        ).fetchall()
+
+    counts = {rid: 0 for rid in responders}
+    for row in rows:
+        counts[row["assigned_to"]] = row["cnt"]
+
+    eligible = [(cnt, rid) for rid, cnt in counts.items() if cnt < TICKET_CAP]
+    if not eligible:
+        return None
+    eligible.sort()  # fewest tickets first, stable by id
+    return eligible[0][1]
+
+
+def _refill_responder(user_id: int):
+    """Assign the highest-priority queued ticket directly to a specific responder if they have room."""
+    with get_users_db() as uconn:
+        u = uconn.execute(
+            "SELECT available FROM users WHERE id = ? AND is_active = 1", (user_id,)
+        ).fetchone()
+    if not u or not u["available"]:
+        return
+    with get_db() as conn:
+        cnt = conn.execute(
+            "SELECT COUNT(*) as cnt FROM messages "
+            "WHERE assigned_to = ? AND ticket_status = 'pending_approval'",
+            (user_id,),
+        ).fetchone()["cnt"]
+    if cnt >= TICKET_CAP:
+        return
+    with get_db() as conn:
+        queued = conn.execute(
+            "SELECT id, extracted_data, received_at FROM messages "
+            "WHERE ticket_status = 'queued' "
+            "ORDER BY received_at ASC"
+        ).fetchall()
+    if not queued:
+        return
+
+    def _sort_key(r):
+        data = json.loads(r["extracted_data"]) if r["extracted_data"] else {}
+        return (URGENCY_ORDER.get(data.get("urgency", "medium"), 2), r["received_at"] or "")
+
+    best = min(queued, key=_sort_key)
+    with get_db() as conn:
+        conn.execute(
+            "UPDATE messages SET assigned_to = ?, ticket_status = 'pending_approval' "
+            "WHERE id = ? AND ticket_status = 'queued'",
+            (user_id, best["id"]),
+        )
+        conn.commit()
+
+
+def _flush_ticket_queue():
+    """Assign queued tickets to responders with open slots.
+    Sorted by urgency (critical first) then time of arrival (oldest first).
+    """
+    with get_db() as conn:
+        queued = conn.execute(
+            "SELECT id, extracted_data, received_at FROM messages "
+            "WHERE ticket_status = 'queued' "
+            "ORDER BY received_at ASC"
+        ).fetchall()
+    if not queued:
+        return
+
+    def _sort_key(r):
+        data = json.loads(r["extracted_data"]) if r["extracted_data"] else {}
+        urgency = data.get("urgency", "medium")
+        return (URGENCY_ORDER.get(urgency, 2), r["received_at"] or "")
+
+    for ticket in sorted(queued, key=_sort_key):
+        assignee = _assign_ticket()
+        if assignee is None:
+            break
+        with get_db() as conn:
+            conn.execute(
+                "UPDATE messages SET assigned_to = ?, ticket_status = 'pending_approval' "
+                "WHERE id = ? AND ticket_status = 'queued'",
+                (assignee, ticket["id"]),
+            )
+            conn.commit()
 
 
 def init_db():
+    with sqlite3.connect(USERS_DB_PATH) as conn:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS users (
+                id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                username      TEXT UNIQUE NOT NULL,
+                password_hash TEXT NOT NULL,
+                role          TEXT DEFAULT 'responder',
+                created_at    TEXT,
+                is_active     INTEGER DEFAULT 1,
+                available     INTEGER DEFAULT 0
+            )
+        """)
+        existing_u = {row[1] for row in conn.execute("PRAGMA table_info(users)")}
+        if "available" not in existing_u:
+            conn.execute("ALTER TABLE users ADD COLUMN available INTEGER DEFAULT 0")
+        # Ensure the built-in host admin account exists so the host token has a real DB row
+        if not conn.execute("SELECT id FROM users WHERE username = '_host'").fetchone():
+            conn.execute(
+                "INSERT INTO users (username, password_hash, role, created_at, is_active, available) "
+                "VALUES ('_host', ?, 'admin', ?, 1, 1)",
+                (secrets.token_hex(64), datetime.now(timezone.utc).isoformat()),
+            )
+        conn.commit()
+
     with sqlite3.connect(DB_PATH) as conn:
         conn.execute("""
             CREATE TABLE IF NOT EXISTS messages (
@@ -75,7 +303,7 @@ def init_db():
                 message_type   TEXT DEFAULT 'sms'
             )
         """)
-        # Migrate existing DBs that may be missing the new columns
+        # Migrate existing DBs that may be missing columns
         existing = {row[1] for row in conn.execute("PRAGMA table_info(messages)")}
         for col, definition in [
             ("status", "TEXT DEFAULT 'needs_processing'"),
@@ -86,14 +314,66 @@ def init_db():
             ("processing_duration_ms", "INTEGER"),
             ("processing_node", "TEXT"),
             ("retry_count", "INTEGER DEFAULT 0"),
+            ("reply_needed", "INTEGER DEFAULT 0"),
+            ("reply_draft", "TEXT"),
+            ("reply_draft_source", "TEXT"),
+            ("assigned_to", "INTEGER"),
+            ("ticket_status", "TEXT"),
+            ("approved_by", "INTEGER"),
+            ("approved_at", "TEXT"),
         ]:
             if col not in existing:
                 conn.execute(f"ALTER TABLE messages ADD COLUMN {col} {definition}")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_messages_status ON messages(status)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_messages_received_at ON messages(received_at)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_messages_assigned ON messages(assigned_to)")
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS settings (
+                key   TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            )
+        """)
+        conn.execute(
+            "INSERT OR IGNORE INTO settings (key, value) VALUES ('replies_enabled', '1')"
+        )
 
 
 init_db()
+
+_replies_enabled: bool = True
+_replies_lock = threading.Lock()
+
+
+@contextmanager
+def get_db():
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    try:
+        yield conn
+    finally:
+        conn.close()
+
+
+@contextmanager
+def get_users_db():
+    conn = sqlite3.connect(USERS_DB_PATH)
+    conn.row_factory = sqlite3.Row
+    try:
+        yield conn
+    finally:
+        conn.close()
+
+
+def _load_replies_setting():
+    global _replies_enabled
+    with get_db() as conn:
+        row = conn.execute("SELECT value FROM settings WHERE key = 'replies_enabled'").fetchone()
+        if row:
+            with _replies_lock:
+                _replies_enabled = row["value"] == "1"
+
+
+_load_replies_setting()
 
 _event_loop = None
 _zeroconf: Zeroconf | None = None
@@ -175,17 +455,8 @@ def _broadcast_sync(payload: dict):
         asyncio.run_coroutine_threadsafe(manager.broadcast(payload), _event_loop)
 
 
-@contextmanager
-def get_db():
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    try:
-        yield conn
-    finally:
-        conn.close()
-
-
 def row_to_message(r: sqlite3.Row) -> dict:
+    keys = r.keys()
     return {
         "id": str(r["id"]),
         "type": r["message_type"] or "sms",
@@ -198,6 +469,10 @@ def row_to_message(r: sqlite3.Row) -> dict:
         "processingStartedAt": r["processing_started_at"],
         "processingDurationMs": r["processing_duration_ms"],
         "processingNode": r["processing_node"],
+        "replyNeeded": bool(r["reply_needed"]) if "reply_needed" in keys else False,
+        "replyDraft": r["reply_draft"] if "reply_draft" in keys else None,
+        "assignedTo": r["assigned_to"] if "assigned_to" in keys else None,
+        "ticketStatus": r["ticket_status"] if "ticket_status" in keys else None,
     }
 
 
@@ -274,12 +549,28 @@ def _run_gemma_bg(msg_id: int, content: str):
                 result = _request_single(build_extraction_prompt(all_contents[0]), temperature=0.0, url=node.url, num_gpu=node.num_gpu, prefix_cached=node.prefix_cached)
                 t1 = time.perf_counter()
                 data = validate_and_canonicalize(parse_response(result.response))
+                data = check_reply_needed(data, all_contents[0])
                 t2 = time.perf_counter()
                 duration_ms = int((datetime.now(timezone.utc) - started_at).total_seconds() * 1000)
                 with get_db() as conn:
+                    if not _replies_enabled:
+                        data["reply_needed"] = False
+                        data["reply_draft"] = None
+                        data["reply_draft_source"] = None
+                    assigned_to = _assign_ticket()
+                    ticket_status = "pending_approval" if assigned_to is not None else "queued"
                     conn.execute(
-                        "UPDATE messages SET extracted_data = ?, status = 'processed', processing_duration_ms = ?, processing_node = ? WHERE id = ?",
-                        (json.dumps(data), duration_ms, node.name, all_ids[0])
+                        "UPDATE messages SET extracted_data = ?, status = 'processed', "
+                        "processing_duration_ms = ?, processing_node = ?, "
+                        "reply_needed = ?, reply_draft = ?, reply_draft_source = ?, "
+                        "assigned_to = ?, ticket_status = ? "
+                        "WHERE id = ?",
+                        (json.dumps(data), duration_ms, node.name,
+                         1 if data.get("reply_needed") else 0,
+                         data.get("reply_draft"),
+                         data.get("reply_draft_source"),
+                         assigned_to, ticket_status,
+                         all_ids[0])
                     )
                     conn.commit()
                 t3 = time.perf_counter()
@@ -298,16 +589,34 @@ def _run_gemma_bg(msg_id: int, content: str):
                 result = _request_batch(all_contents, temperature=0.0, url=node.url, num_gpu=node.num_gpu, prefix_cached=node.prefix_cached)
                 t1 = time.perf_counter()
                 items = _parse_batch_response(result.response)
-                items = [validate_and_canonicalize(item) for item in items]
+                items = [
+                    check_reply_needed(validate_and_canonicalize(item), all_contents[i] if i < len(all_contents) else "")
+                    for i, item in enumerate(items)
+                ]
                 t2 = time.perf_counter()
                 duration_ms = int((datetime.now(timezone.utc) - started_at).total_seconds() * 1000)
                 with get_db() as conn:
                     for i, mid in enumerate(all_ids):
                         if i < len(items):
                             data = items[i]
+                            if not _replies_enabled:
+                                data["reply_needed"] = False
+                                data["reply_draft"] = None
+                                data["reply_draft_source"] = None
+                            assigned_to = _assign_ticket()
+                            ticket_status = "pending_approval" if assigned_to is not None else "queued"
                             conn.execute(
-                                "UPDATE messages SET extracted_data = ?, status = 'processed', processing_duration_ms = ?, processing_node = ? WHERE id = ?",
-                                (json.dumps(data), duration_ms, node.name, mid)
+                                "UPDATE messages SET extracted_data = ?, status = 'processed', "
+                                "processing_duration_ms = ?, processing_node = ?, "
+                                "reply_needed = ?, reply_draft = ?, reply_draft_source = ?, "
+                                "assigned_to = ?, ticket_status = ? "
+                                "WHERE id = ?",
+                                (json.dumps(data), duration_ms, node.name,
+                                 1 if data.get("reply_needed") else 0,
+                                 data.get("reply_draft"),
+                                 data.get("reply_draft_source"),
+                                 assigned_to, ticket_status,
+                                 mid)
                             )
                             _broadcast_sync({"type": "processing_done", "msgId": str(mid), "durationMs": duration_ms, "extractedData": data, "nodeName": node.name})
                         else:
@@ -346,13 +655,112 @@ def _run_gemma_bg(msg_id: int, content: str):
             if to_retry:
                 threading.Thread(target=_run_gemma_bg, args=(to_retry[0], ""), daemon=True).start()
 
-    # Continue draining — if more messages are queued, keep the pipeline alive
+    # Continue draining main queue; if empty, promote reply drafts (lower priority)
     with get_db() as conn:
         nxt = conn.execute(
             "SELECT id FROM messages WHERE status = 'needs_processing' LIMIT 1"
         ).fetchone()
     if nxt:
         threading.Thread(target=_run_gemma_bg, args=(nxt["id"], ""), daemon=True).start()
+    else:
+        _trigger_reply_draft_upgrade()
+
+
+def _trigger_reply_draft_upgrade():
+    """Kick off a reply-draft upgrade job if any tickets are waiting for one."""
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT id, message FROM messages "
+            "WHERE reply_needed = 1 AND ticket_status = 'pending_approval' "
+            "AND reply_draft_source = 'ai_template' "
+            "LIMIT 1"
+        ).fetchone()
+    if row:
+        threading.Thread(target=_run_reply_draft_bg, args=(row["id"], row["message"]), daemon=True).start()
+
+
+def _run_reply_draft_bg(msg_id: int, content: str):
+    """Generate an AI reply draft for a ticket that was batch-extracted.
+
+    Uses the full single-message prompt (includes rep field) so Gemma writes
+    a proper reply instead of the template from reply_checker.py.
+
+    Guards: skips immediately if the responder has already edited or approved.
+    Checks again after acquiring a node (the responder may have acted while waiting).
+    """
+    def _still_needs_upgrade(conn) -> bool:
+        row = conn.execute(
+            "SELECT reply_draft_source, ticket_status FROM messages WHERE id = ?", (msg_id,)
+        ).fetchone()
+        if row is None:
+            return False
+        return (
+            row["ticket_status"] == "pending_approval"
+            and row["reply_draft_source"] == "ai_template"
+        )
+
+    with get_db() as conn:
+        if not _still_needs_upgrade(conn):
+            return
+
+    try:
+        with node_pool.acquire() as node:
+            # Priority check: real messages beat draft upgrades.
+            # If any arrived while we waited for the node, release it immediately —
+            # the blocked _run_gemma_bg thread will wake up and process them.
+            with get_db() as conn:
+                if conn.execute(
+                    "SELECT id FROM messages WHERE status = 'needs_processing' LIMIT 1"
+                ).fetchone():
+                    return  # node released by context manager; _run_gemma_bg wakes up
+
+            # Ticket guard: responder may have acted while waiting for a node
+            with get_db() as conn:
+                if not _still_needs_upgrade(conn):
+                    return
+
+            result = _request_single(
+                build_extraction_prompt(content),
+                temperature=0.0,
+                url=node.url,
+                num_gpu=node.num_gpu,
+                prefix_cached=node.prefix_cached,
+            )
+
+        parsed = parse_response(result.response)
+        draft = parsed.get("rep") if isinstance(parsed, dict) else None
+        if not draft or not str(draft).strip():
+            print(f"[reply_draft {msg_id}] AI returned no draft")
+            return
+
+        draft = str(draft).strip()
+
+        with get_db() as conn:
+            # Final guard — responder may have edited while we were running Gemma
+            if not _still_needs_upgrade(conn):
+                return
+            conn.execute(
+                "UPDATE messages SET reply_draft = ?, reply_draft_source = 'ai_single' WHERE id = ?",
+                (draft, msg_id),
+            )
+            conn.commit()
+
+        _broadcast_sync({"type": "reply_draft_ready", "msgId": str(msg_id), "replyDraft": draft})
+        print(f"[reply_draft {msg_id}] upgraded: {draft[:80]}")
+
+    except Exception as e:
+        print(f"[reply_draft {msg_id}] failed: {e}")
+
+    # Chain: upgrade next ticket in the queue (main queue still empty at this point)
+    with get_db() as conn:
+        nxt_main = conn.execute(
+            "SELECT id FROM messages WHERE status = 'needs_processing' LIMIT 1"
+        ).fetchone()
+    if nxt_main:
+        # Main queue got new work — yield back to it
+        threading.Thread(target=_run_gemma_bg, args=(nxt_main["id"], ""), daemon=True).start()
+    else:
+        _trigger_reply_draft_upgrade()
 
 
 def _sweep_after_cooldown(nxt_id: int, delay: float = 30.0):
@@ -597,6 +1005,31 @@ def get_stats():
     }
 
 
+@app.get("/api/admin/stats")
+def get_admin_stats(admin: dict = Depends(require_admin)):
+    with get_db() as conn:
+        status_rows = conn.execute(
+            "SELECT status, COUNT(*) as cnt FROM messages GROUP BY status"
+        ).fetchall()
+        ticket_rows = conn.execute(
+            "SELECT ticket_status, COUNT(*) as cnt FROM messages WHERE ticket_status IS NOT NULL GROUP BY ticket_status"
+        ).fetchall()
+        total = conn.execute("SELECT COUNT(*) as cnt FROM messages").fetchone()["cnt"]
+    status_counts = {r["status"]: r["cnt"] for r in status_rows}
+    ticket_counts = {r["ticket_status"]: r["cnt"] for r in ticket_rows}
+    return {
+        "totalMessages": total,
+        "processed": status_counts.get("processed", 0),
+        "needsProcessing": status_counts.get("needs_processing", 0) + status_counts.get("processing", 0),
+        "fulfilled": status_counts.get("fulfilled", 0),
+        "failed": status_counts.get("failed", 0),
+        "ticketsPendingApproval": ticket_counts.get("pending_approval", 0),
+        "ticketsQueued": ticket_counts.get("queued", 0),
+        "ticketsApproved": ticket_counts.get("approved", 0),
+        "nodes": node_pool.list_nodes(),
+    }
+
+
 @app.get("/api/messages/history")
 def get_history():
     with get_db() as conn:
@@ -655,6 +1088,23 @@ def seed_inbox(background_tasks: BackgroundTasks):
     return {"ok": True, "queued": len(inserted)}
 
 
+class ExtractedDataUpdate(BaseModel):
+    extracted_data: dict
+
+
+@app.patch("/api/messages/{message_id}/extracted")
+def update_message_extracted(message_id: int, body: ExtractedDataUpdate):
+    with get_db() as conn:
+        result = conn.execute(
+            "UPDATE messages SET extracted_data = ? WHERE id = ?",
+            (json.dumps(body.extracted_data), message_id),
+        )
+        conn.commit()
+        if result.rowcount == 0:
+            raise HTTPException(status_code=404, detail="Message not found")
+    return {"ok": True}
+
+
 @app.patch("/api/messages/{message_id}/status")
 def update_status(message_id: int, body: StatusUpdate):
     allowed = {"needs_processing", "processing", "processed", "fulfilled", "failed"}
@@ -706,6 +1156,303 @@ async def update_packing(message_id: int, body: PackingUpdate):
         "packedQty": body.packedQty,
     })
     return {"ok": True}
+
+
+# ── Auth models ──────────────────────────────────────────────────────────────
+
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+
+
+class CreateUserRequest(BaseModel):
+    username: str
+    password: str
+    role: str = "responder"
+
+
+class TicketReplyUpdate(BaseModel):
+    reply_draft: str
+
+
+class AvailabilityUpdate(BaseModel):
+    available: bool
+
+
+# ── Auth endpoints ────────────────────────────────────────────────────────────
+
+@app.post("/auth/setup")
+def auth_setup(body: LoginRequest):
+    """Create the first admin account. Only works if no users exist."""
+    with get_users_db() as conn:
+        count = conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+        if count > 0:
+            raise HTTPException(status_code=403, detail="Setup already complete. Use /auth/users to add accounts.")
+        pw_hash = _hash_password(body.password)
+        conn.execute(
+            "INSERT INTO users (username, password_hash, role, created_at) VALUES (?, ?, 'admin', ?)",
+            (body.username.strip(), pw_hash, datetime.now(timezone.utc).isoformat())
+        )
+        conn.commit()
+        user = conn.execute("SELECT * FROM users WHERE username = ?", (body.username.strip(),)).fetchone()
+    token = _create_token(user["id"], user["username"], user["role"])
+    return {"token": token, "username": user["username"], "role": user["role"]}
+
+
+@app.post("/auth/login")
+def auth_login(body: LoginRequest):
+    with get_users_db() as conn:
+        user = conn.execute("SELECT * FROM users WHERE username = ? AND is_active = 1", (body.username.strip(),)).fetchone()
+    if user is None or not _verify_password(body.password, user["password_hash"]):
+        raise HTTPException(status_code=401, detail="Invalid username or password")
+    token = _create_token(user["id"], user["username"], user["role"])
+    return {"token": token, "username": user["username"], "role": user["role"]}
+
+
+@app.get("/auth/me")
+def auth_me(user: dict = Depends(require_user)):
+    user_id = int(user["sub"])
+    available = True
+    if user_id > 0:
+        with get_users_db() as conn:
+            row = conn.execute("SELECT available FROM users WHERE id = ?", (user_id,)).fetchone()
+            if row is not None:
+                available = bool(row["available"])
+    return {"id": user["sub"], "username": user["username"], "role": user["role"], "available": available}
+
+
+@app.get("/auth/setup-needed")
+def auth_setup_needed():
+    """Frontend uses this to decide whether to show the setup wizard."""
+    with get_users_db() as conn:
+        count = conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+    return {"setupNeeded": count == 0}
+
+
+@app.get("/auth/host-token")
+def auth_host_token(request: Request):
+    """Return an admin token for the host device (localhost only).
+
+    The host machine never needs to log in — it gets a token automatically.
+    Remote devices that are not localhost receive 403.
+    """
+    ip = request.headers.get("x-forwarded-for") or (request.client.host if request.client else "")
+    try:
+        is_local = ipaddress.ip_address(ip).is_loopback
+    except ValueError:
+        is_local = ip in ("localhost", "127.0.0.1", "::1")
+    if not is_local:
+        raise HTTPException(status_code=403, detail="Host access only")
+    with get_users_db() as conn:
+        host_user = conn.execute("SELECT id FROM users WHERE username = '_host'").fetchone()
+    if host_user is None:
+        raise HTTPException(status_code=500, detail="Host account not initialised — restart the server")
+    token = _create_token(host_user["id"], "host", "admin")
+    return {"token": token, "username": "host", "role": "admin"}
+
+
+@app.post("/auth/users")
+def create_user(body: CreateUserRequest, admin: dict = Depends(require_admin)):
+    if body.role not in ("admin", "responder"):
+        raise HTTPException(status_code=400, detail="role must be 'admin' or 'responder'")
+    pw_hash = _hash_password(body.password)
+    try:
+        with get_users_db() as conn:
+            conn.execute(
+                "INSERT INTO users (username, password_hash, role, created_at) VALUES (?, ?, ?, ?)",
+                (body.username.strip(), pw_hash, body.role, datetime.now(timezone.utc).isoformat())
+            )
+            conn.commit()
+            user = conn.execute("SELECT id, username, role, created_at, is_active FROM users WHERE username = ?", (body.username.strip(),)).fetchone()
+    except sqlite3.IntegrityError:
+        raise HTTPException(status_code=409, detail="Username already exists")
+    return {"id": user["id"], "username": user["username"], "role": user["role"]}
+
+
+@app.get("/auth/users")
+def list_users(admin: dict = Depends(require_admin)):
+    with get_users_db() as conn:
+        rows = conn.execute("SELECT id, username, role, created_at, is_active, available FROM users ORDER BY id").fetchall()
+    user_ids = [r["id"] for r in rows]
+    ticket_counts: dict[int, dict] = {uid: {"pending": 0, "approved": 0} for uid in user_ids}
+    if user_ids:
+        with get_db() as conn:
+            for row in conn.execute(
+                f"SELECT assigned_to, ticket_status, COUNT(*) as cnt FROM messages "
+                f"WHERE assigned_to IN ({','.join('?'*len(user_ids))}) AND ticket_status IS NOT NULL "
+                f"GROUP BY assigned_to, ticket_status",
+                user_ids,
+            ).fetchall():
+                uid = row["assigned_to"]
+                if uid in ticket_counts:
+                    if row["ticket_status"] == "pending_approval":
+                        ticket_counts[uid]["pending"] = row["cnt"]
+                    elif row["ticket_status"] == "approved":
+                        ticket_counts[uid]["approved"] = row["cnt"]
+    return [
+        {
+            "id": r["id"],
+            "username": r["username"],
+            "role": r["role"],
+            "isActive": bool(r["is_active"]),
+            "available": bool(r["available"]),
+            "ticketsPending": ticket_counts[r["id"]]["pending"],
+            "ticketsApproved": ticket_counts[r["id"]]["approved"],
+        }
+        for r in rows
+    ]
+
+
+@app.patch("/auth/users/me/available")
+def set_availability(body: AvailabilityUpdate, user: dict = Depends(require_user)):
+    user_id = int(user["sub"])
+    with get_users_db() as conn:
+        conn.execute(
+            "UPDATE users SET available = ? WHERE id = ?",
+            (1 if body.available else 0, user_id),
+        )
+        conn.commit()
+    if not body.available:
+        # Requeue this responder's pending tickets so others can pick them up
+        with get_db() as conn:
+            conn.execute(
+                "UPDATE messages SET ticket_status = 'queued', assigned_to = NULL "
+                "WHERE assigned_to = ? AND ticket_status = 'pending_approval'",
+                (user_id,),
+            )
+            conn.commit()
+    _flush_ticket_queue()
+    return {"ok": True, "available": body.available}
+
+
+@app.delete("/auth/users/{user_id}")
+def deactivate_user(user_id: int, admin: dict = Depends(require_admin)):
+    if str(user_id) == admin["sub"]:
+        raise HTTPException(status_code=400, detail="Cannot deactivate yourself")
+    with get_users_db() as conn:
+        target = conn.execute("SELECT username FROM users WHERE id = ?", (user_id,)).fetchone()
+        if target and target["username"] == "_host":
+            raise HTTPException(status_code=400, detail="Cannot deactivate the host account")
+        result = conn.execute("UPDATE users SET is_active = 0 WHERE id = ?", (user_id,))
+        conn.commit()
+        if result.rowcount == 0:
+            raise HTTPException(status_code=404, detail="User not found")
+    return {"ok": True}
+
+
+# ── Ticket endpoints ──────────────────────────────────────────────────────────
+
+@app.get("/api/tickets")
+def get_tickets(user: dict = Depends(require_user)):
+    with get_db() as conn:
+        if user["role"] == "admin":
+            rows = conn.execute(
+                "SELECT * FROM messages WHERE ticket_status IS NOT NULL ORDER BY id DESC LIMIT 200"
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT * FROM messages WHERE ticket_status IS NOT NULL AND assigned_to = ? ORDER BY id DESC LIMIT 200",
+                (int(user["sub"]),)
+            ).fetchall()
+    return [row_to_message(r) for r in rows]
+
+
+@app.patch("/api/tickets/{message_id}/extracted")
+def update_ticket_extracted(message_id: int, body: ExtractedDataUpdate, user: dict = Depends(require_user)):
+    with get_db() as conn:
+        row = conn.execute("SELECT assigned_to FROM messages WHERE id = ?", (message_id,)).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="Ticket not found")
+        if user["role"] != "admin" and row["assigned_to"] != int(user["sub"]):
+            raise HTTPException(status_code=403, detail="Not assigned to you")
+        conn.execute(
+            "UPDATE messages SET extracted_data = ? WHERE id = ?",
+            (json.dumps(body.extracted_data), message_id),
+        )
+        conn.commit()
+    return {"ok": True}
+
+
+@app.patch("/api/tickets/{message_id}/reply")
+def update_ticket_reply(message_id: int, body: TicketReplyUpdate, user: dict = Depends(require_user)):
+    with get_db() as conn:
+        row = conn.execute("SELECT assigned_to, reply_needed FROM messages WHERE id = ?", (message_id,)).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="Ticket not found")
+        if user["role"] != "admin" and row["assigned_to"] != int(user["sub"]):
+            raise HTTPException(status_code=403, detail="Not assigned to you")
+        conn.execute(
+            "UPDATE messages SET reply_draft = ?, reply_draft_source = 'responder', "
+            "ticket_status = 'pending_approval' WHERE id = ?",
+            (body.reply_draft.strip(), message_id)
+        )
+        conn.commit()
+    return {"ok": True}
+
+
+@app.post("/api/tickets/{message_id}/approve")
+def approve_ticket(message_id: int, user: dict = Depends(require_user)):
+    user_id = int(user["sub"])
+    with get_db() as conn:
+        row = conn.execute("SELECT assigned_to, reply_needed, reply_draft FROM messages WHERE id = ?", (message_id,)).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="Ticket not found")
+        if user["role"] != "admin" and row["assigned_to"] != user_id:
+            raise HTTPException(status_code=403, detail="Not assigned to you")
+        if row["reply_needed"] and not row["reply_draft"]:
+            raise HTTPException(status_code=400, detail="No reply draft to approve")
+        conn.execute(
+            "UPDATE messages SET ticket_status = 'approved', approved_by = ?, approved_at = ? WHERE id = ?",
+            (user_id, datetime.now(timezone.utc).isoformat(), message_id)
+        )
+        conn.commit()
+    # Give the approver the next queued ticket first (they just freed a slot), then flush the rest
+    _refill_responder(user_id)
+    _flush_ticket_queue()
+    return {"ok": True, "status": "approved"}
+
+
+@app.post("/api/tickets/{message_id}/claim")
+def claim_ticket(message_id: int, user: dict = Depends(require_user)):
+    """Manually assign a queued ticket to yourself, bypassing the cap."""
+    user_id = int(user["sub"])
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT ticket_status FROM messages WHERE id = ?", (message_id,)
+        ).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="Ticket not found")
+        if row["ticket_status"] != "queued":
+            raise HTTPException(status_code=400, detail="Ticket is not queued")
+        conn.execute(
+            "UPDATE messages SET assigned_to = ?, ticket_status = 'pending_approval' WHERE id = ?",
+            (user_id, message_id),
+        )
+        conn.commit()
+    return {"ok": True}
+
+
+class RepliesSettingUpdate(BaseModel):
+    enabled: bool
+
+
+@app.get("/api/settings/replies")
+def get_replies_setting():
+    return {"enabled": _replies_enabled}
+
+
+@app.patch("/api/settings/replies")
+def set_replies_setting(body: RepliesSettingUpdate, admin: dict = Depends(require_admin)):
+    global _replies_enabled
+    with _replies_lock:
+        _replies_enabled = body.enabled
+    with get_db() as conn:
+        conn.execute(
+            "UPDATE settings SET value = ? WHERE key = 'replies_enabled'",
+            ("1" if body.enabled else "0",),
+        )
+        conn.commit()
+    return {"enabled": body.enabled}
 
 
 class NodeRegistration(BaseModel):
