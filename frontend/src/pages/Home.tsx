@@ -7,7 +7,9 @@ import {
   Reply,
   Clock,
   HeartHandshake,
-  ArrowRight,
+  ArrowDown,
+  Share2,
+  Download,
   Mail,
   Github,
   Linkedin,
@@ -67,16 +69,7 @@ const STEPS: Step[] = [
     icon: <Clock className="w-5 h-5" strokeWidth={1.75} />,
     blurb: "archive across today / this week / all-time, filterable by urgency.",
   },
-  {
-    n: 7,
-    to: "/donor-view",
-    label: "donor view",
-    icon: <HeartHandshake className="w-5 h-5" strokeWidth={1.75} />,
-    blurb: "public-facing page donors can browse to pick what to bring.",
-  },
 ];
-
-const FLOW = ["intake", "inbox", "pulso", "coverage", "sagot", "history"];
 
 type Dev = {
   name: string;
@@ -164,8 +157,8 @@ export function Home() {
           </div>
         </section>
 
-        {/* how it works */}
-        <section className="max-w-3xl mx-auto px-6 pb-10">
+        {/* how it works — the pipeline */}
+        <section className="max-w-2xl mx-auto px-6 pb-12">
           <h2
             className="font-display font-bold mb-2"
             style={{
@@ -176,74 +169,158 @@ export function Home() {
           >
             how it works
           </h2>
-          <p className="text-sm mb-6" style={{ color: "var(--color-ash)" }}>
-            a report comes in, gets parsed, lands on the dashboard, gets matched. seven
-            pages, one workflow.
+          <p className="text-sm mb-8" style={{ color: "var(--color-ash)" }}>
+            a report comes in, gets parsed, lands on the dashboard, gets matched. six
+            stages, one direction.
           </p>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            {STEPS.map((s) => (
-              <Link
-                key={s.to}
-                to={s.to}
-                className="flex items-start gap-4 p-5 rounded-xl bg-surface-container-low hover:bg-surface-container-high border border-outline-variant/30 transition-all active:scale-[0.98] duration-150"
-              >
-                <div
-                  className="flex items-center justify-center w-10 h-10 rounded-full shrink-0 font-mono text-sm font-semibold"
-                  style={{
-                    background: "var(--color-paper-deep)",
-                    color: "var(--color-ink-soft)",
-                  }}
+          {/* vertical pipeline */}
+          <ol className="flex flex-col gap-0">
+            {STEPS.map((s, i) => (
+              <li key={s.to} className="flex flex-col items-stretch">
+                <Link
+                  to={s.to}
+                  className="flex items-start gap-4 p-5 rounded-xl bg-surface-container-low hover:bg-surface-container-high border border-outline-variant/30 transition-all active:scale-[0.98] duration-150"
                 >
-                  {s.n}
-                </div>
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2 mb-1">
-                    <span style={{ color: "var(--color-dagat)" }}>{s.icon}</span>
-                    <h3
-                      className="font-display font-bold text-base"
-                      style={{ color: "var(--color-ink)", letterSpacing: "-0.01em" }}
-                    >
-                      {s.label}
-                    </h3>
-                  </div>
-                  <p className="text-sm leading-snug" style={{ color: "var(--color-ash)" }}>
-                    {s.blurb}
-                  </p>
-                </div>
-              </Link>
-            ))}
-          </div>
-        </section>
-
-        {/* workflow arrow strip */}
-        <section className="max-w-3xl mx-auto px-6 pb-16">
-          <div
-            className="rounded-xl px-4 py-4 overflow-x-auto"
-            style={{ background: "var(--color-paper-warm)" }}
-          >
-            <div className="flex items-center gap-2 whitespace-nowrap">
-              {FLOW.map((label, i) => (
-                <span key={label} className="inline-flex items-center gap-2">
-                  <span
-                    className="font-mono text-xs px-2.5 py-1 rounded-md"
+                  <div
+                    className="flex items-center justify-center w-10 h-10 rounded-full shrink-0 font-mono text-sm font-semibold"
                     style={{
-                      background: "var(--color-paper)",
+                      background: "var(--color-paper-deep)",
                       color: "var(--color-ink-soft)",
-                      border: "1px solid var(--color-paper-edge)",
                     }}
                   >
-                    {label}
-                  </span>
-                  {i < FLOW.length - 1 && (
-                    <ArrowRight
-                      className="w-3.5 h-3.5 shrink-0"
+                    {s.n}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 mb-1">
+                      <span style={{ color: "var(--color-dagat)" }}>{s.icon}</span>
+                      <h3
+                        className="font-display font-bold text-base"
+                        style={{ color: "var(--color-ink)", letterSpacing: "-0.01em" }}
+                      >
+                        {s.label}
+                      </h3>
+                    </div>
+                    <p
+                      className="text-sm leading-snug"
                       style={{ color: "var(--color-ash)" }}
+                    >
+                      {s.blurb}
+                    </p>
+                  </div>
+                </Link>
+
+                {i < STEPS.length - 1 && (
+                  <div
+                    className="flex items-center justify-center py-1.5"
+                    aria-hidden="true"
+                  >
+                    <ArrowDown
+                      className="w-4 h-4"
                       strokeWidth={1.75}
+                      style={{ color: "var(--color-ash)" }}
                     />
-                  )}
-                </span>
-              ))}
+                  </div>
+                )}
+              </li>
+            ))}
+          </ol>
+        </section>
+
+        {/* donor view — separated, emphasized */}
+        <section className="max-w-3xl mx-auto px-6 pb-16">
+          <div
+            className="rounded-2xl overflow-hidden border-2"
+            style={{
+              borderColor: "var(--color-araw)",
+              background: "var(--color-paper-warm)",
+            }}
+          >
+            <div
+              className="px-6 py-3 flex items-center gap-2"
+              style={{
+                background: "var(--color-araw)",
+                color: "var(--color-ink)",
+              }}
+            >
+              <Share2 className="w-4 h-4" strokeWidth={2} />
+              <span className="font-mono text-xs font-bold uppercase tracking-wider">
+                outward channel
+              </span>
+            </div>
+
+            <div className="px-6 py-7">
+              <div className="flex items-center gap-3 mb-3">
+                <HeartHandshake
+                  className="w-6 h-6"
+                  strokeWidth={1.75}
+                  style={{ color: "var(--color-dagat)" }}
+                />
+                <h3
+                  className="font-display font-bold"
+                  style={{
+                    fontSize: 24,
+                    color: "var(--color-ink)",
+                    letterSpacing: "-0.02em",
+                  }}
+                >
+                  donor view
+                </h3>
+              </div>
+
+              <p
+                className="text-base leading-relaxed mb-4"
+                style={{ color: "var(--color-ink-soft)", maxWidth: "60ch" }}
+              >
+                a clean, public-facing snapshot of what each area needs — built to be
+                shared online so donors and partners know exactly what to bring.
+              </p>
+
+              <ul
+                className="text-sm leading-relaxed mb-6 space-y-1.5"
+                style={{ color: "var(--color-ash)" }}
+              >
+                <li className="flex gap-2">
+                  <span style={{ color: "var(--color-araw)" }}>•</span>
+                  share it on Facebook, Viber, email, or as a printout when network
+                  allows.
+                </li>
+                <li className="flex gap-2">
+                  <span style={{ color: "var(--color-araw)" }}>•</span>
+                  it does <em>not</em> update live — every share is a snapshot stamped
+                  with the date and time it was generated.
+                </li>
+                <li className="flex gap-2">
+                  <span style={{ color: "var(--color-araw)" }}>•</span>
+                  exportable as a printable / PDF copy operators can attach and resend.
+                </li>
+              </ul>
+
+              <div className="flex flex-wrap gap-3">
+                <Link
+                  to="/donor-view"
+                  className="inline-flex items-center gap-1.5 rounded-md py-2.5 px-4 text-sm font-semibold transition-colors active:scale-[0.98]"
+                  style={{
+                    background: "var(--color-dagat)",
+                    color: "var(--color-bone)",
+                  }}
+                >
+                  <HeartHandshake className="w-4 h-4" strokeWidth={2.2} />
+                  preview donor view
+                </Link>
+                <Link
+                  to="/donor-view"
+                  className="inline-flex items-center gap-1.5 rounded-md py-2.5 px-4 text-sm font-semibold transition-colors active:scale-[0.98]"
+                  style={{
+                    background: "transparent",
+                    color: "var(--color-dagat)",
+                    border: "1px solid var(--color-dagat)",
+                  }}
+                >
+                  <Download className="w-4 h-4" strokeWidth={2.2} />
+                  export & share
+                </Link>
+              </div>
             </div>
           </div>
         </section>

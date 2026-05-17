@@ -474,7 +474,7 @@ class ManualMessage(BaseModel):
 
 @app.get("/")
 def health_check():
-    return {"ok": True, "service": "Bayanihan-AI SMS receiver"}
+    return {"ok": True, "service": "akbay SMS receiver"}
 
 
 @app.post("/")
