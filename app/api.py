@@ -1778,6 +1778,164 @@ async def download_join_script(request: Request, name: str = ""):
     )
 
 
+@app.get("/api/nodes/usb-setup")
+async def download_usb_setup():
+    host_base = f"http://{MDNS_NAME}:{MDNS_PORT}"
+    script = f"""#!/bin/bash
+# ==================================================
+#  Akbay Node Setup Wizard
+#  Runs from USB — sets up Ollama + Gemma, joins host
+# ==================================================
+set -e
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+MODEL_FILE="$SCRIPT_DIR/Gemma 4/model.gguf"
+
+echo ""
+echo "=============================="
+echo "  Akbay Node Setup"
+echo "=============================="
+echo ""
+
+# ── Step 1: Ollama ────────────────────────────────
+if command -v ollama &>/dev/null; then
+    echo "[1/4] Ollama already installed ✓"
+else
+    echo "[1/4] Ollama not found."
+    INSTALLER=$(find "$SCRIPT_DIR" -maxdepth 1 \( -name "Ollama*.zip" -o -name "Ollama*.dmg" \) | head -1)
+    if [ -n "$INSTALLER" ]; then
+        echo "      Installing from USB..."
+        if [[ "$INSTALLER" == *.zip ]]; then
+            unzip -q "$INSTALLER" -d /Applications/
+        else
+            open "$INSTALLER"
+            echo "      Complete the installer, then press Enter..."
+            read -r
+        fi
+    else
+        echo "      Downloading Ollama (requires internet)..."
+        curl -L https://ollama.com/download/Ollama-darwin.zip -o /tmp/Ollama.zip
+        unzip -q /tmp/Ollama.zip -d /Applications/
+        rm /tmp/Ollama.zip
+    fi
+    echo "      Ollama installed ✓"
+fi
+
+# ── Step 2: Import model from USB into Ollama ────
+if [ ! -f "$MODEL_FILE" ]; then
+    echo "[2/4] ERROR: model not found at '$MODEL_FILE'"
+    read -r; exit 1
+fi
+
+echo "[2/4] Importing model from USB into Ollama..."
+echo "      (Ollama copies it to your device — USB can be removed after this step)"
+TMPFILE=$(mktemp /tmp/Modelfile.XXXXXX)
+printf 'FROM "%s"\\n' "$MODEL_FILE" > "$TMPFILE"
+ollama create {MODEL_NAME} -f "$TMPFILE"
+rm "$TMPFILE"
+echo "      Model imported ✓  (you can now unplug the USB)"
+
+# ── Step 3: Start Ollama on the network ──────────
+echo "[3/4] Starting Ollama on the network..."
+pkill -f "ollama serve" 2>/dev/null || true
+sleep 1
+OLLAMA_HOST=0.0.0.0 ollama serve &
+OLLAMA_PID=$!
+for i in $(seq 1 15); do
+    curl -s http://localhost:11434/api/tags >/dev/null 2>&1 && break
+    sleep 1
+done
+echo "      Ollama running ✓"
+
+# ── Step 4: Join the host ─────────────────────────
+echo "[4/4] Connecting to host at {host_base}..."
+RESPONSE=$(curl -s -X POST {host_base}/api/nodes \\
+    -H "Content-Type: application/json" \\
+    -d "{{\\"name\\":\\"$(hostname)\\"}}")
+echo "      $RESPONSE"
+
+echo ""
+echo "=============================="
+echo "  Setup complete!"
+echo "  Keep this window open to"
+echo "  contribute to the network."
+echo "  Press Ctrl+C to stop."
+echo "=============================="
+wait $OLLAMA_PID
+"""
+    return Response(
+        content=script,
+        media_type="application/octet-stream",
+        headers={"Content-Disposition": 'attachment; filename="setup.command"'},
+    )
+
+
+@app.get("/api/nodes/usb-setup-win")
+async def download_usb_setup_win():
+    host_base = f"http://{MDNS_NAME}:{MDNS_PORT}"
+    script = (
+        "@echo off\r\n"
+        "echo ==============================\r\n"
+        "echo   Akbay Node Setup\r\n"
+        "echo ==============================\r\n"
+        "echo.\r\n"
+        ":: Step 1: Check Ollama\r\n"
+        "where ollama >nul 2>&1\r\n"
+        "if %errorlevel% neq 0 (\r\n"
+        "    echo [1/4] Ollama not found.\r\n"
+        "    if exist \"%~dp0OllamaSetup.exe\" (\r\n"
+        "        echo       Installing from USB...\r\n"
+        "        \"%~dp0OllamaSetup.exe\" /S\r\n"
+        "        echo       Ollama installed\r\n"
+        "    ) else (\r\n"
+        "        echo       Downloading Ollama (requires internet)...\r\n"
+        "        curl -L https://ollama.com/download/OllamaSetup.exe -o \"%TEMP%\\OllamaSetup.exe\"\r\n"
+        "        \"%TEMP%\\OllamaSetup.exe\" /S\r\n"
+        "        del \"%TEMP%\\OllamaSetup.exe\"\r\n"
+        "    )\r\n"
+        ") else (\r\n"
+        "    echo [1/4] Ollama already installed\r\n"
+        ")\r\n"
+        ":: Step 2: Import model from USB into Ollama\r\n"
+        "if not exist \"%~dp0Gemma 4\\model.gguf\" (\r\n"
+        "    echo [2/4] ERROR: model not found at Gemma 4\\model.gguf on USB\r\n"
+        "    pause\r\n"
+        "    exit /b 1\r\n"
+        ")\r\n"
+        "echo [2/4] Importing model from USB into Ollama...\r\n"
+        "echo       (Ollama copies it to your device - USB can be removed after this step)\r\n"
+        "echo FROM \"%~dp0Gemma 4\\model.gguf\" > \"%TEMP%\\Modelfile\"\r\n"
+        f'ollama create {MODEL_NAME} -f "%TEMP%\\Modelfile"\r\n'
+        "del \"%TEMP%\\Modelfile\"\r\n"
+        "echo       Model imported - you can now unplug the USB\r\n"
+        ":: Step 3: Start Ollama\r\n"
+        "echo [3/4] Starting Ollama on the network...\r\n"
+        "netsh advfirewall firewall add rule name=\"Ollama Node\" dir=in action=allow protocol=TCP localport=11434 >nul 2>&1\r\n"
+        "start /MIN \"Akbay Node\" cmd /k \"set OLLAMA_HOST=0.0.0.0 && ollama serve\"\r\n"
+        "set tries=0\r\n"
+        ":wait\r\n"
+        "timeout /t 1 /nobreak >nul\r\n"
+        "curl -s http://localhost:11434/api/tags >nul 2>&1\r\n"
+        "if not errorlevel 1 goto register\r\n"
+        "set /a tries=tries+1\r\n"
+        "if %tries% lss 15 goto wait\r\n"
+        ":register\r\n"
+        "echo [4/4] Connecting to host...\r\n"
+        f'curl -X POST {host_base}/api/nodes -H "Content-Type: application/json" -d "{{\\\"name\\\":\\\"%COMPUTERNAME%\\\"}}"\r\n'
+        "echo.\r\n"
+        "echo ==============================\r\n"
+        "echo   Setup complete!\r\n"
+        "echo   Keep this window open.\r\n"
+        "echo   Press Ctrl+C to stop.\r\n"
+        "echo ==============================\r\n"
+        "pause\r\n"
+    )
+    return Response(
+        content=script,
+        media_type="application/octet-stream",
+        headers={"Content-Disposition": 'attachment; filename="setup.bat"'},
+    )
+
+
 @app.post("/api/retry-failed")
 def retry_failed(background_tasks: BackgroundTasks):
     with get_db() as conn:
