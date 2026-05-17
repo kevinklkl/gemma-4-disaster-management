@@ -214,6 +214,8 @@ def _parse_batch_response(text: str) -> list:
     if text.startswith("```"): text = text[3:]
     if text.endswith("```"): text = text[:-3]
     text = text.strip()
+    # \' is not a valid JSON escape; the model occasionally emits it for apostrophes
+    text = text.replace("\\'", "'")
 
     start = text.find("{")
     if start == -1:
@@ -269,7 +271,7 @@ def _run_gemma_bg(msg_id: int, content: str):
         try:
             if len(all_ids) == 1:
                 t0 = time.perf_counter()
-                result = _request_single(build_extraction_prompt(all_contents[0]), temperature=0.1, url=node.url, num_gpu=node.num_gpu, prefix_cached=node.prefix_cached)
+                result = _request_single(build_extraction_prompt(all_contents[0]), temperature=0.0, url=node.url, num_gpu=node.num_gpu, prefix_cached=node.prefix_cached)
                 t1 = time.perf_counter()
                 data = validate_and_canonicalize(parse_response(result.response))
                 t2 = time.perf_counter()
@@ -342,8 +344,21 @@ def _run_gemma_bg(msg_id: int, content: str):
             for mid in to_fail:
                 _broadcast_sync({"type": "processing_failed", "msgId": str(mid)})
             if to_retry:
-                import threading
                 threading.Thread(target=_run_gemma_bg, args=(to_retry[0], ""), daemon=True).start()
+
+    # Continue draining — if more messages are queued, keep the pipeline alive
+    with get_db() as conn:
+        nxt = conn.execute(
+            "SELECT id FROM messages WHERE status = 'needs_processing' LIMIT 1"
+        ).fetchone()
+    if nxt:
+        threading.Thread(target=_run_gemma_bg, args=(nxt["id"], ""), daemon=True).start()
+
+
+def _sweep_after_cooldown(nxt_id: int, delay: float = 30.0):
+    """Wait for a newly joined node to finish starting up, then kick off the queue drain."""
+    time.sleep(delay)
+    _run_gemma_bg(nxt_id, "")
 
 
 BATCH_SIZE = 10
@@ -420,7 +435,6 @@ def _run_gemma_batch(msg_ids: list, contents: list):
         if missed > 0:
             print(f"[batch] {missed} msgs truncated — re-triggering sweep")
             leftover_ids = msg_ids[filled:]
-            import threading
             threading.Thread(
                 target=_run_gemma_bg,
                 args=(leftover_ids[0], ""),
@@ -435,7 +449,6 @@ def _run_gemma_batch(msg_ids: list, contents: list):
                     "UPDATE messages SET status='needs_processing', retry_count=1 WHERE id=?", (msg_id,)
                 )
             conn.commit()
-        import threading
         threading.Thread(target=_run_gemma_bg, args=(msg_ids[0], ""), daemon=True).start()
 
 
@@ -769,6 +782,13 @@ def _transfer_then_register(ip: str, node_name: str, android: bool = False):
         num_gpu = _detect_num_gpu(ip)
         status = node_pool.register(f"{base_url}/api/generate", node_name, num_gpu=num_gpu, prefix_cached=True, android=android)
         print(f"[nodes] {ip} ({node_name}) auto-registered after transfer, status={status}")
+        if status == "registered":
+            with get_db() as conn:
+                nxt = conn.execute(
+                    "SELECT id FROM messages WHERE status = 'needs_processing' LIMIT 1"
+                ).fetchone()
+            if nxt:
+                threading.Thread(target=_sweep_after_cooldown, args=(nxt["id"],), daemon=True).start()
     else:
         print(f"[nodes] model transfer to {ip} ({node_name}) failed — node not added")
 
@@ -814,6 +834,13 @@ async def register_node(request: Request, body: NodeRegistration):
 
     url = f"http://{ip}:11434/api/generate"
     status = node_pool.register(url, node_name, num_gpu=num_gpu, prefix_cached=True, android=is_android)
+    if status == "registered":
+        with get_db() as conn:
+            nxt = conn.execute(
+                "SELECT id FROM messages WHERE status = 'needs_processing' LIMIT 1"
+            ).fetchone()
+        if nxt:
+            threading.Thread(target=_sweep_after_cooldown, args=(nxt["id"],), daemon=True).start()
     return {"ok": True, "status": status, "nodes": node_pool.list_nodes(), "cache_prompt": _get_shared_prefix()}
 
 
@@ -869,6 +896,12 @@ async def probe_node(request: Request):
         return {"joined": False, "transferring": True}
 
     node_pool.register(url, ip, num_gpu=-1, prefix_cached=True, android=is_android)
+    with get_db() as conn:
+        nxt = conn.execute(
+            "SELECT id FROM messages WHERE status = 'needs_processing' LIMIT 1"
+        ).fetchone()
+    if nxt:
+        threading.Thread(target=_sweep_after_cooldown, args=(nxt["id"],), daemon=True).start()
     return {"joined": True, "isHost": False, "nodes": node_pool.list_nodes()}
 
 
@@ -986,7 +1019,7 @@ async def process_message(req: ProcessRequest):
 
         prompt = build_extraction_prompt(req.content)
         t0 = time.perf_counter()
-        result = await asyncio.to_thread(call_ollama, prompt, 0.1)
+        result = await asyncio.to_thread(call_ollama, prompt, 0.0)
         t1 = time.perf_counter()
         data = validate_and_canonicalize(parse_response(result.response))
         t2 = time.perf_counter()
