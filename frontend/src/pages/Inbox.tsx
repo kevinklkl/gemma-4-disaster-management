@@ -66,6 +66,10 @@ export function Inbox() {
   const [activeSource, setActiveSource] = useState("all");
   const [searchQuery, setSearchQuery] = useState("");
   const searchDebounce = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const activeSourceRef = useRef(activeSource);
+  const searchQueryRef = useRef(searchQuery);
+  useEffect(() => { activeSourceRef.current = activeSource; }, [activeSource]);
+  useEffect(() => { searchQueryRef.current = searchQuery; }, [searchQuery]);
   const [stats, setStats] = useState({ processed: 0, inQueue: 0, failed: 0 });
   const [, setProcessingIds] = useState<Set<string>>(new Set());
   const processingRefs = useRef<Set<string>>(new Set());
@@ -184,11 +188,15 @@ export function Inbox() {
               : m
           ));
         } else if (msg.type === "processing_done") {
-          setMessages(prev => prev.map(m =>
-            m.id === msg.msgId
-              ? { ...m, status: "processed", processingDurationMs: msg.durationMs, extractedData: msg.extractedData, processingNode: msg.nodeName }
-              : m
-          ));
+          setMessages(prev => {
+            const found = prev.some(m => m.id === msg.msgId);
+            if (!found) doFetch(activeSourceRef.current, searchQueryRef.current, 0, false);
+            return prev.map(m =>
+              m.id === msg.msgId
+                ? { ...m, status: "processed", processingDurationMs: msg.durationMs, extractedData: msg.extractedData, processingNode: msg.nodeName }
+                : m
+            );
+          });
           processingRefs.current.delete(msg.msgId);
           setProcessingIds(prev => { const n = new Set(prev); n.delete(msg.msgId); return n; });
           fetch("/api/stats").then(r => r.json()).then(setStats).catch(() => {});
@@ -198,6 +206,9 @@ export function Inbox() {
           ));
           processingRefs.current.delete(msg.msgId);
           setProcessingIds(prev => { const n = new Set(prev); n.delete(msg.msgId); return n; });
+          fetch("/api/stats").then(r => r.json()).then(setStats).catch(() => {});
+        } else if (msg.type === "new_message") {
+          doFetch(activeSourceRef.current, searchQueryRef.current, 0, false);
           fetch("/api/stats").then(r => r.json()).then(setStats).catch(() => {});
         }
       };

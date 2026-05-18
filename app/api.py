@@ -1026,6 +1026,26 @@ async def receive_sms(request: Request, background_tasks: BackgroundTasks):
         "raw_payload": payload,
     }
     print("NEW SMS:", record)
+    await manager.broadcast({
+        "type": "new_message",
+        "message": {
+            "id": str(row_id),
+            "type": "sms",
+            "source": sender,
+            "time": received_at,
+            "content": message,
+            "status": "needs_processing",
+            "extractedData": None,
+            "packingState": {},
+            "processingStartedAt": None,
+            "processingDurationMs": None,
+            "processingNode": None,
+            "replyNeeded": False,
+            "replyDraft": None,
+            "assignedTo": None,
+            "ticketStatus": None,
+        }
+    })
     background_tasks.add_task(_run_gemma_bg, row_id, message)
 
     return {"ok": True, "received": record, "inbox_count": count}
@@ -1211,6 +1231,7 @@ def create_message(body: ManualMessage, background_tasks: BackgroundTasks):
         conn.commit()
         row_id = cur.lastrowid
         row = conn.execute("SELECT * FROM messages WHERE id = ?", (row_id,)).fetchone()
+    _broadcast_sync({"type": "new_message", "message": row_to_message(row)})
     background_tasks.add_task(_run_gemma_bg, row_id, body.content)
     return row_to_message(row)
 
