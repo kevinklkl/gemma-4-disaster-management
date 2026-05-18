@@ -522,6 +522,70 @@ def _parse_batch_response(text: str) -> list:
 
     return []
 
+def _run_gemma_single(msg_id: int):
+    """Force single-message processing for a specific ID, bypassing the batch sweep.
+    Used as a fallback when a batch parse returns 0 items."""
+    with node_pool.acquire() as node:
+        started_at = datetime.now(timezone.utc)
+        with get_db() as conn:
+            row = conn.execute(
+                "SELECT id, message FROM messages WHERE id = ? AND status = 'needs_processing'", (msg_id,)
+            ).fetchone()
+            if not row:
+                return
+            conn.execute(
+                "UPDATE messages SET status = 'processing', processing_started_at = ? WHERE id = ?",
+                (started_at.isoformat(), msg_id),
+            )
+            conn.commit()
+        content = row["message"]
+        _broadcast_sync({"type": "processing_started", "msgId": str(msg_id), "startedAt": started_at.isoformat()})
+        try:
+            t0 = time.perf_counter()
+            result = _request_single(build_extraction_prompt(content), temperature=0.0, url=node.url, num_gpu=node.num_gpu, prefix_cached=node.prefix_cached)
+            t1 = time.perf_counter()
+            data = validate_and_canonicalize(parse_response(result.response))
+            data = check_reply_needed(data, content)
+            t2 = time.perf_counter()
+            duration_ms = int((datetime.now(timezone.utc) - started_at).total_seconds() * 1000)
+            with get_db() as conn:
+                if not _replies_enabled:
+                    data["reply_needed"] = False
+                    data["reply_draft"] = None
+                    data["reply_draft_source"] = None
+                assigned_to = _assign_ticket()
+                ticket_status = "pending_approval" if assigned_to is not None else "queued"
+                conn.execute(
+                    "UPDATE messages SET extracted_data = ?, status = 'processed', "
+                    "processing_duration_ms = ?, processing_node = ?, "
+                    "reply_needed = ?, reply_draft = ?, reply_draft_source = ?, "
+                    "assigned_to = ?, ticket_status = ? "
+                    "WHERE id = ?",
+                    (json.dumps(data), duration_ms, node.name,
+                     1 if data.get("reply_needed") else 0,
+                     data.get("reply_draft"), data.get("reply_draft_source"),
+                     assigned_to, ticket_status, msg_id),
+                )
+                conn.commit()
+            t3 = time.perf_counter()
+            _broadcast_sync({"type": "processing_done", "msgId": str(msg_id), "durationMs": duration_ms, "extractedData": data, "nodeName": node.name})
+            print(
+                f"[msg {msg_id} @{node.name}] total={duration_ms}ms"
+                f"  ollama={1000*(t1-t0):.0f}ms  parse={1000*(t2-t1):.0f}ms  db={1000*(t3-t2):.0f}ms"
+                f"  [{result.timing_summary()}]"
+            )
+        except Exception as e:
+            print(f"Gemma single fallback failed for message {msg_id}: {e}")
+            with get_db() as conn:
+                retry = (conn.execute("SELECT retry_count FROM messages WHERE id = ?", (msg_id,)).fetchone()["retry_count"] or 0)
+                if retry < 1:
+                    conn.execute("UPDATE messages SET status='needs_processing', retry_count=1 WHERE id=?", (msg_id,))
+                else:
+                    conn.execute("UPDATE messages SET status='failed' WHERE id=?", (msg_id,))
+                    _broadcast_sync({"type": "processing_failed", "msgId": str(msg_id)})
+                conn.commit()
+
+
 def _run_gemma_bg(msg_id: int, content: str):
     """Acquire a node from the pool, sweep the DB for all queued messages and batch them."""
     with node_pool.acquire() as node:
@@ -591,6 +655,19 @@ def _run_gemma_bg(msg_id: int, content: str):
                 result = _request_batch(all_contents, temperature=0.0, url=node.url, num_gpu=node.num_gpu, prefix_cached=node.prefix_cached)
                 t1 = time.perf_counter()
                 items = _parse_batch_response(result.response)
+                if not items:
+                    # Batch parse produced nothing — fall back to individual single-message calls
+                    # so these messages aren't lost or stuck in an infinite retry loop.
+                    print(f"[batch] parse returned 0 items, falling back to single-message processing for {all_ids}")
+                    with get_db() as conn:
+                        conn.execute(
+                            f"UPDATE messages SET status='needs_processing' WHERE id IN ({','.join('?'*len(all_ids))})",
+                            all_ids,
+                        )
+                        conn.commit()
+                    for mid in all_ids:
+                        threading.Thread(target=_run_gemma_single, args=(mid,), daemon=True).start()
+                    return
                 items = [
                     check_reply_needed(validate_and_canonicalize(item), all_contents[i] if i < len(all_contents) else "")
                     for i, item in enumerate(items)
@@ -1801,7 +1878,7 @@ if command -v ollama &>/dev/null; then
     echo "[1/4] Ollama already installed ✓"
 else
     echo "[1/4] Ollama not found."
-    INSTALLER=$(find "$SCRIPT_DIR" -maxdepth 1 \( -name "Ollama*.zip" -o -name "Ollama*.dmg" \) | head -1)
+    INSTALLER=$(find "$SCRIPT_DIR" -maxdepth 1 \\( -name "Ollama*.zip" -o -name "Ollama*.dmg" \\) | head -1)
     if [ -n "$INSTALLER" ]; then
         echo "      Installing from USB..."
         if [[ "$INSTALLER" == *.zip ]]; then

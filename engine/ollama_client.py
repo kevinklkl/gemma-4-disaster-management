@@ -4,6 +4,7 @@ import pathlib
 import shutil
 import subprocess
 import threading
+import time
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 import requests
@@ -12,6 +13,7 @@ from prompts.extraction_prompt import build_batch_prompt, _get_shared_prefix, _g
 OLLAMA_URL = "http://localhost:11434/api/generate"
 MODEL_NAME = "gemma4-e2b-unsloth"
 ANDROID_MODEL_NAME = "gemma-4-e2b"
+NODE_RETRY_INTERVAL = 300  # seconds between offline-node health checks
 
 
 @dataclass
@@ -101,8 +103,8 @@ def _request_batch(messages: list[str], temperature: float, url: str = OLLAMA_UR
                 "temperature": temperature,
                 "top_p": 0.95,
                 "top_k": 64,
-                "num_ctx": 3072,
-                "num_predict": 1200,
+                "num_ctx": 4096,
+                "num_predict": 2048,
                 "num_gpu": num_gpu,
             },
         },
@@ -129,11 +131,14 @@ class _OllamaNode:
 class NodePool:
     def __init__(self):
         self._nodes: list[_OllamaNode] = []
+        self._offline: dict[str, _OllamaNode] = {}
         self._cv = threading.Condition(threading.Lock())
+        self._watcher_running = False
         self._nodes.append(_OllamaNode(url=OLLAMA_URL, name="local", num_gpu=LOCAL_NUM_GPU))
 
     def register(self, url: str, name: str, num_gpu: int = -1, prefix_cached: bool = False, android: bool = False) -> str:
         with self._cv:
+            self._offline.pop(url, None)
             for node in self._nodes:
                 if node.url == url:
                     node.android = android
@@ -145,6 +150,39 @@ class NodePool:
             max_batch = 2 if android else 10
             self._nodes.append(_OllamaNode(url=url, name=name, num_gpu=num_gpu, prefix_cached=prefix_cached, model_name=model, android=android, max_batch=max_batch))
             return "registered"
+
+    def mark_offline(self, url: str):
+        with self._cv:
+            node = next((n for n in self._nodes if n.url == url), None)
+            if not node:
+                return
+            self._nodes = [n for n in self._nodes if n.url != url]
+            self._offline[url] = node
+            print(f"[nodes] {node.name} ({url}) went offline — will retry in {NODE_RETRY_INTERVAL}s")
+            self._cv.notify_all()
+            if not self._watcher_running:
+                self._watcher_running = True
+                threading.Thread(target=self._watch_offline, daemon=True).start()
+
+    def _watch_offline(self):
+        while True:
+            time.sleep(NODE_RETRY_INTERVAL)
+            with self._cv:
+                offline_snapshot = dict(self._offline)
+            if not offline_snapshot:
+                with self._cv:
+                    self._watcher_running = False
+                return
+            for url, node in offline_snapshot.items():
+                base_url = url.rsplit("/api/generate", 1)[0]
+                try:
+                    resp = requests.get(f"{base_url}/api/tags", timeout=5)
+                    if not resp.ok:
+                        continue
+                except Exception:
+                    continue
+                print(f"[nodes] {node.name} ({url}) is back online, re-registering")
+                self.register(url, node.name, num_gpu=node.num_gpu, prefix_cached=node.prefix_cached, android=node.android)
 
     def _try_acquire(self) -> "_OllamaNode | None":
         for node in self._nodes:
@@ -177,6 +215,7 @@ class NodePool:
         with self._cv:
             before = len(self._nodes)
             self._nodes = [n for n in self._nodes if n.url != url]
+            self._offline.pop(url, None)
             self._cv.notify_all()
             return len(self._nodes) < before
 
@@ -374,9 +413,17 @@ def _do_transfer(node_base_url: str) -> bool:
 
 def call_ollama(prompt: str, temperature: float = 1.0) -> OllamaResult:
     with node_pool.acquire() as node:
-        return _request_single(prompt, temperature, url=node.url, num_gpu=node.num_gpu, prefix_cached=node.prefix_cached, model_name=node.model_name)
+        try:
+            return _request_single(prompt, temperature, url=node.url, num_gpu=node.num_gpu, prefix_cached=node.prefix_cached, model_name=node.model_name)
+        except requests.exceptions.ConnectionError:
+            node_pool.mark_offline(node.url)
+            raise
 
 
 def call_ollama_batch(messages: list[str], temperature: float = 1.0) -> OllamaResult:
     with node_pool.acquire() as node:
-        return _request_batch(messages, temperature, url=node.url, num_gpu=node.num_gpu, prefix_cached=node.prefix_cached, model_name=node.model_name)
+        try:
+            return _request_batch(messages, temperature, url=node.url, num_gpu=node.num_gpu, prefix_cached=node.prefix_cached, model_name=node.model_name)
+        except requests.exceptions.ConnectionError:
+            node_pool.mark_offline(node.url)
+            raise
