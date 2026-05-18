@@ -770,9 +770,17 @@ def _run_gemma_batch(msg_ids: list, contents: list):
             for i, msg_id in enumerate(msg_ids):
                 if i < len(items):
                     data = items[i]
+                    assigned_to = _assign_ticket()
+                    ticket_status = "pending_approval" if assigned_to is not None else "queued"
                     conn.execute(
-                        "UPDATE messages SET extracted_data = ?, status = 'processed', processing_duration_ms = ?, processing_node = ? WHERE id = ?",
-                        (json.dumps(data), duration_ms, node_name, msg_id)
+                        "UPDATE messages SET extracted_data = ?, status = 'processed', "
+                        "processing_duration_ms = ?, processing_node = ?, "
+                        "reply_needed = ?, reply_draft = ?, reply_draft_source = ?, "
+                        "assigned_to = ?, ticket_status = ? WHERE id = ?",
+                        (json.dumps(data), duration_ms, node_name,
+                         1 if data.get("reply_needed") else 0,
+                         data.get("reply_draft"), data.get("reply_draft_source"),
+                         assigned_to, ticket_status, msg_id)
                     )
                     _broadcast_sync({"type": "processing_done", "msgId": str(msg_id), "durationMs": duration_ms, "extractedData": data, "nodeName": node_name})
                 else:
@@ -1218,7 +1226,7 @@ def set_device_receiving(device_id: str, body: DeviceReceivingUpdate):
                 (device_id,),
             )
             conn.commit()
-        _flush_ticket_queue()
+    _flush_ticket_queue()
     return {"ok": True, "receiving": body.receiving}
 
 
@@ -1230,7 +1238,10 @@ def get_tickets(x_device_id: str | None = Header(None)):
         raise HTTPException(status_code=400, detail="X-Device-ID header required")
     with get_db() as conn:
         rows = conn.execute(
-            "SELECT * FROM messages WHERE ticket_status IS NOT NULL AND assigned_to = ? ORDER BY id DESC LIMIT 200",
+            "SELECT * FROM messages "
+            "WHERE (assigned_to = ? AND ticket_status IS NOT NULL) "
+            "   OR (ticket_status = 'queued' AND assigned_to IS NULL) "
+            "ORDER BY id DESC LIMIT 200",
             (x_device_id,),
         ).fetchall()
     return [row_to_message(r) for r in rows]
@@ -1307,6 +1318,12 @@ def claim_ticket(message_id: int, x_device_id: str | None = Header(None)):
             raise HTTPException(status_code=404, detail="Ticket not found")
         if row["ticket_status"] != "queued":
             raise HTTPException(status_code=400, detail="Ticket is not queued")
+        open_count = conn.execute(
+            "SELECT COUNT(*) as cnt FROM messages WHERE assigned_to = ? AND ticket_status = 'pending_approval'",
+            (x_device_id,),
+        ).fetchone()["cnt"]
+        if open_count >= TICKET_CAP:
+            raise HTTPException(status_code=400, detail=f"You already have {TICKET_CAP} open tickets")
         conn.execute(
             "UPDATE messages SET assigned_to = ?, ticket_status = 'pending_approval' WHERE id = ?",
             (x_device_id, message_id),
@@ -1815,9 +1832,12 @@ async def process_message(req: ProcessRequest):
 
         if req.id is not None:
             with get_db() as conn:
+                assigned_to = _assign_ticket()
+                ticket_status = "pending_approval" if assigned_to is not None else "queued"
                 conn.execute(
-                    "UPDATE messages SET extracted_data = ?, status = 'processed', processing_duration_ms = ? WHERE id = ?",
-                    (json.dumps(data), duration_ms, int(req.id))
+                    "UPDATE messages SET extracted_data = ?, status = 'processed', "
+                    "processing_duration_ms = ?, assigned_to = ?, ticket_status = ? WHERE id = ?",
+                    (json.dumps(data), duration_ms, assigned_to, ticket_status, int(req.id))
                 )
                 conn.commit()
             t3 = time.perf_counter()
