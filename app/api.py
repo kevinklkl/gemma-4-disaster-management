@@ -1,5 +1,6 @@
 import asyncio
 import csv
+import ipaddress
 import json
 import os
 import socket
@@ -321,8 +322,20 @@ async def _startup():
 @app.on_event("shutdown")
 async def _shutdown():
     if _zeroconf and _zeroconf_info:
-        await asyncio.to_thread(_zeroconf.unregister_service, _zeroconf_info)
-        await asyncio.to_thread(_zeroconf.close)
+        try:
+            await asyncio.wait_for(
+                asyncio.to_thread(_zeroconf.unregister_service, _zeroconf_info),
+                timeout=2.0,
+            )
+        except Exception:
+            pass
+        try:
+            await asyncio.wait_for(
+                asyncio.to_thread(_zeroconf.close),
+                timeout=2.0,
+            )
+        except Exception:
+            pass
 
 
 def _broadcast_sync(payload: dict):
@@ -547,16 +560,18 @@ def _run_gemma_bg(msg_id: int, content: str):
                 ]
                 t2 = time.perf_counter()
                 duration_ms = int((datetime.now(timezone.utc) - started_at).total_seconds() * 1000)
-                with get_db() as conn:
-                    for i, mid in enumerate(all_ids):
-                        if i < len(items):
-                            data = items[i]
-                            if not _replies_enabled:
-                                data["reply_needed"] = False
-                                data["reply_draft"] = None
-                                data["reply_draft_source"] = None
-                            assigned_to = _assign_ticket()
-                            ticket_status = "pending_approval" if assigned_to is not None else "queued"
+                for i, mid in enumerate(all_ids):
+                    if i < len(items):
+                        data = items[i]
+                        if not _replies_enabled:
+                            data["reply_needed"] = False
+                            data["reply_draft"] = None
+                            data["reply_draft_source"] = None
+                        # Commit each assignment individually so _assign_ticket()
+                        # sees up-to-date counts and TICKET_CAP is respected.
+                        assigned_to = _assign_ticket()
+                        ticket_status = "pending_approval" if assigned_to is not None else "queued"
+                        with get_db() as conn:
                             conn.execute(
                                 "UPDATE messages SET extracted_data = ?, status = 'processed', "
                                 "processing_duration_ms = ?, processing_node = ?, "
@@ -570,10 +585,12 @@ def _run_gemma_bg(msg_id: int, content: str):
                                  assigned_to, ticket_status,
                                  mid)
                             )
-                            _broadcast_sync({"type": "processing_done", "msgId": str(mid), "durationMs": duration_ms, "extractedData": data, "nodeName": node.name})
-                        else:
+                            conn.commit()
+                        _broadcast_sync({"type": "processing_done", "msgId": str(mid), "durationMs": duration_ms, "extractedData": data, "nodeName": node.name})
+                    else:
+                        with get_db() as conn:
                             conn.execute("UPDATE messages SET status = 'needs_processing' WHERE id = ?", (mid,))
-                    conn.commit()
+                            conn.commit()
                 t3 = time.perf_counter()
                 filled = min(len(items), len(all_ids))
                 print(
@@ -766,12 +783,12 @@ def _run_gemma_batch(msg_ids: list, contents: list):
         t2 = time.perf_counter()
         duration_ms = int((datetime.now(timezone.utc) - started_at).total_seconds() * 1000)
 
-        with get_db() as conn:
-            for i, msg_id in enumerate(msg_ids):
-                if i < len(items):
-                    data = items[i]
-                    assigned_to = _assign_ticket()
-                    ticket_status = "pending_approval" if assigned_to is not None else "queued"
+        for i, msg_id in enumerate(msg_ids):
+            if i < len(items):
+                data = items[i]
+                assigned_to = _assign_ticket()
+                ticket_status = "pending_approval" if assigned_to is not None else "queued"
+                with get_db() as conn:
                     conn.execute(
                         "UPDATE messages SET extracted_data = ?, status = 'processed', "
                         "processing_duration_ms = ?, processing_node = ?, "
@@ -782,11 +799,13 @@ def _run_gemma_batch(msg_ids: list, contents: list):
                          data.get("reply_draft"), data.get("reply_draft_source"),
                          assigned_to, ticket_status, msg_id)
                     )
-                    _broadcast_sync({"type": "processing_done", "msgId": str(msg_id), "durationMs": duration_ms, "extractedData": data, "nodeName": node_name})
-                else:
-                    # Truncated — requeue for retry
+                    conn.commit()
+                _broadcast_sync({"type": "processing_done", "msgId": str(msg_id), "durationMs": duration_ms, "extractedData": data, "nodeName": node_name})
+            else:
+                # Truncated — requeue for retry
+                with get_db() as conn:
                     conn.execute("UPDATE messages SET status = 'needs_processing' WHERE id = ?", (msg_id,))
-            conn.commit()
+                    conn.commit()
         t3 = time.perf_counter()
 
         filled = min(len(items), n)
@@ -1294,8 +1313,6 @@ def approve_ticket(message_id: int, x_device_id: str | None = Header(None)):
             raise HTTPException(status_code=404, detail="Ticket not found")
         if row["assigned_to"] != x_device_id:
             raise HTTPException(status_code=403, detail="Not assigned to you")
-        if row["reply_needed"] and not row["reply_draft"]:
-            raise HTTPException(status_code=400, detail="No reply draft to approve")
         conn.execute(
             "UPDATE messages SET ticket_status = 'approved', approved_by = ?, approved_at = ? WHERE id = ?",
             (x_device_id, datetime.now(timezone.utc).isoformat(), message_id)
