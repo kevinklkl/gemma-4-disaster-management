@@ -87,6 +87,24 @@ export function Coverage() {
       </div>
       <div className="flex flex-1 overflow-hidden relative">
         <main className="flex-1 w-full relative z-0">
+          <div
+            className="absolute inset-0 z-[1000] flex items-center justify-center pointer-events-none"
+          >
+            <div
+              className="flex flex-col items-center gap-2 px-6 py-4 rounded-2xl"
+              style={{
+                background: "rgba(244,236,216,0.92)",
+                backdropFilter: "blur(10px)",
+                border: "1px solid var(--color-paper-edge)",
+                boxShadow: "var(--shadow-2)",
+              }}
+            >
+              <AlertTriangle className="w-6 h-6" style={{ color: "var(--color-ember)" }} strokeWidth={2} />
+              <span className="font-display font-bold text-base" style={{ color: "var(--color-ink)", letterSpacing: "-0.02em" }}>
+                Feature not yet available
+              </span>
+            </div>
+          </div>
            <MapContainer center={position} zoom={12} scrollWheelZoom={true} className="w-full h-full">
             <TileLayer
               attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
@@ -142,13 +160,13 @@ export function Coverage() {
               boxShadow: "var(--shadow-2)",
             }}
           >
-             <h3 className="ak-caps mb-3" style={{ color: "var(--color-ash)" }}>need category</h3>
-             <div className="space-y-2 text-xs" style={{ color: "var(--color-ink)" }}>
-               <div className="flex items-center gap-2"><div className="w-2.5 h-2.5 rounded-full" style={{ background: "#00A3FF" }}></div> drinking water</div>
-               <div className="flex items-center gap-2"><div className="w-2.5 h-2.5 rounded-full" style={{ background: "#FDAB3D" }}></div> food packs</div>
-               <div className="flex items-center gap-2"><div className="w-2.5 h-2.5 rounded-full" style={{ background: "#a25ddc" }}></div> shelter</div>
-               <div className="flex items-center gap-2"><div className="w-2.5 h-2.5 rounded-full" style={{ background: "#E2445C" }}></div> medical</div>
-             </div>
+            <h3 className="ak-caps mb-3" style={{ color: "var(--color-ash)" }}>priority</h3>
+            <div className="space-y-2 text-xs" style={{ color: "var(--color-ink)" }}>
+              <div className="flex items-center gap-2"><div className="w-2.5 h-2.5 rounded-full" style={{ background: "var(--color-tabang)" }}></div> critical</div>
+              <div className="flex items-center gap-2"><div className="w-2.5 h-2.5 rounded-full" style={{ background: "var(--color-signal)" }}></div> high</div>
+              <div className="flex items-center gap-2"><div className="w-2.5 h-2.5 rounded-full" style={{ background: "var(--color-ember)" }}></div> medium</div>
+              <div className="flex items-center gap-2"><div className="w-2.5 h-2.5 rounded-full" style={{ background: "var(--color-damay)" }}></div> low</div>
+            </div>
           </div>
         </main>
       </div>

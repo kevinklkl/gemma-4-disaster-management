@@ -11,7 +11,6 @@ import {
   ArrowDown,
   Share2,
   Download,
-  Mail,
   Github,
   Linkedin,
   User,
@@ -89,25 +88,28 @@ const STEPS: Step[] = [
 type Dev = {
   name: string;
   role: string;
-  email: string;
   github: string;
+  githubUrl: string;
   linkedin: string;
+  linkedinUrl: string;
 };
 
 const DEVS: Dev[] = [
   {
-    name: "developer one",
-    role: "role placeholder",
-    email: "name@example.com",
-    github: "github.com/handle",
-    linkedin: "linkedin.com/in/handle",
+    name: "Jacob Solaña",
+    role: "developer",
+    github: "github.com/jcobrew",
+    githubUrl: "https://github.com/jcobrew",
+    linkedin: "linkedin.com/in/jacob-solaña",
+    linkedinUrl: "https://www.linkedin.com/in/jacob-sola%C3%B1a-543692183/",
   },
   {
-    name: "developer two",
-    role: "role placeholder",
-    email: "name@example.com",
-    github: "github.com/handle",
-    linkedin: "linkedin.com/in/handle",
+    name: "Kevin de Lange",
+    role: "developer",
+    github: "github.com/kevinklkl",
+    githubUrl: "https://github.com/kevinklkl",
+    linkedin: "linkedin.com/in/kevin-de-lange",
+    linkedinUrl: "https://www.linkedin.com/in/kevin-de-lange-bba742b3/",
   },
 ];
 
@@ -450,7 +452,7 @@ export function Home() {
               built by
             </h2>
             <p className="text-sm mb-6" style={{ color: "var(--color-ash)" }}>
-              get in touch — feedback, partnerships, deployments.
+              feedback, partnerships, deployments.
             </p>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -486,21 +488,12 @@ export function Home() {
                     </div>
                   </div>
 
-                  {/* swap placeholders below with real links */}
                   <ul className="flex flex-col gap-2 text-sm">
                     <li>
                       <a
-                        href="#"
-                        className="inline-flex items-center gap-2 hover:underline"
-                        style={{ color: "var(--color-dagat)" }}
-                      >
-                        <Mail className="w-4 h-4" strokeWidth={1.75} />
-                        <span className="font-mono text-xs">{d.email}</span>
-                      </a>
-                    </li>
-                    <li>
-                      <a
-                        href="#"
+                        href={d.githubUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
                         className="inline-flex items-center gap-2 hover:underline"
                         style={{ color: "var(--color-dagat)" }}
                       >
@@ -510,7 +503,9 @@ export function Home() {
                     </li>
                     <li>
                       <a
-                        href="#"
+                        href={d.linkedinUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
                         className="inline-flex items-center gap-2 hover:underline"
                         style={{ color: "var(--color-dagat)" }}
                       >

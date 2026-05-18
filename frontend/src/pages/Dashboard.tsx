@@ -2,10 +2,112 @@ import { useState, useEffect, useRef, useMemo } from "react";
 import { TopNav } from "../components/TopNav";
 import { MobileNav } from "../components/MobileNav";
 import { LocationCard as LocationCardComponent } from "../components/LocationCard";
-import { CheckCircle2, ClipboardList } from "lucide-react";
+import { CheckCircle2, ClipboardList, Search, MapPin, Tag } from "lucide-react";
 import type { ApiMessage, ApiLocation, LocationCard, AggregatedItem, ItemSource } from "../types";
 
 const URGENCY_WEIGHT: Record<string, number> = { critical: 4, high: 3, medium: 2, low: 1 };
+
+function SearchableSelect({
+  value,
+  onChange,
+  options,
+  placeholder,
+  icon,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  options: [string, string][];
+  placeholder: string;
+  icon: React.ReactNode;
+}) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  const filtered = options.filter(([, label]) => label.toLowerCase().includes(query.toLowerCase()));
+  const selectedLabel = options.find(([k]) => k === value)?.[1];
+
+  useEffect(() => {
+    if (!open) setQuery("");
+  }, [open]);
+
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      if (containerRef.current && !containerRef.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, []);
+
+  return (
+    <div ref={containerRef} className="relative">
+      <button
+        onClick={() => setOpen(o => !o)}
+        className="flex items-center pl-9 pr-3 py-2 rounded-lg text-sm gap-1"
+        style={{
+          background: "var(--color-paper)",
+          border: "1px solid var(--color-paper-edge)",
+          color: value ? "var(--color-ink)" : "var(--color-ash)",
+        }}
+      >
+        <span className="absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" style={{ color: "var(--color-ash)" }}>
+          {icon}
+        </span>
+        {selectedLabel ?? placeholder}
+      </button>
+
+      {open && (
+        <div
+          className="absolute top-full mt-1 left-0 z-50 rounded-lg overflow-hidden"
+          style={{
+            minWidth: 200,
+            background: "var(--color-paper)",
+            border: "1px solid var(--color-paper-edge)",
+            boxShadow: "0 4px 16px rgba(0,0,0,0.12)",
+          }}
+        >
+          <div className="p-2" style={{ borderBottom: "1px solid var(--color-paper-edge)" }}>
+            <input
+              autoFocus
+              type="text"
+              placeholder="search…"
+              value={query}
+              onChange={e => setQuery(e.target.value)}
+              className="w-full px-2 py-1.5 rounded text-sm outline-none"
+              style={{
+                background: "var(--color-surface-container-low)",
+                border: "1px solid var(--color-paper-edge)",
+                color: "var(--color-ink)",
+              }}
+            />
+          </div>
+          <div className="overflow-y-auto" style={{ maxHeight: 220 }}>
+            <button
+              className="w-full text-left px-3 py-2 text-sm hover:opacity-70"
+              style={{ color: !value ? "var(--color-ink)" : "var(--color-ash)" }}
+              onClick={() => { onChange(""); setOpen(false); }}
+            >
+              {placeholder}
+            </button>
+            {filtered.map(([key, label]) => (
+              <button
+                key={key}
+                className="w-full text-left px-3 py-2 text-sm hover:opacity-70"
+                style={{ color: key === value ? "var(--color-damay)" : "var(--color-ink)" }}
+                onClick={() => { onChange(key); setOpen(false); }}
+              >
+                {label}
+              </button>
+            ))}
+            {filtered.length === 0 && (
+              <p className="px-3 py-2 text-sm" style={{ color: "var(--color-ash)" }}>no matches</p>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
 
 function formatLocation(loc: ApiLocation): string {
   if (!loc) return "Unknown";
@@ -155,6 +257,9 @@ export function Dashboard() {
   const [splitRemainders, setSplitRemainders] = useState<LocationCard[]>([]);
   const [wsConnected, setWsConnected] = useState(false);
   const [now, setNow] = useState(Date.now());
+  const [searchQuery, setSearchQuery] = useState("");
+  const [locationFilter, setLocationFilter] = useState("");
+  const [needFilter, setNeedFilter] = useState("");
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectRef = useRef(true);
   const packingTimers = useRef(new Map<string, ReturnType<typeof setTimeout>>());
@@ -229,6 +334,36 @@ export function Dashboard() {
     const all = [...fromApi, ...splitRemainders];
     return sortCards(all);
   }, [apiMessages, splitRemainders]);
+
+  const locationOptions = useMemo(() => {
+    const locs = new Set(locationCards.map(c => c.location).filter(l => l !== "Unknown"));
+    return Array.from(locs).sort();
+  }, [locationCards]);
+
+  const needOptions = useMemo(() => {
+    const seen = new Map<string, string>();
+    for (const card of locationCards) {
+      for (const item of card.items) {
+        const key = item.canonical || item.name.toLowerCase();
+        if (!seen.has(key)) seen.set(key, item.name);
+      }
+    }
+    return Array.from(seen.entries()).sort((a, b) => a[1].localeCompare(b[1]));
+  }, [locationCards]);
+
+  const filteredCards = useMemo(() => {
+    return locationCards.filter(card => {
+      if (locationFilter && card.location !== locationFilter) return false;
+      if (needFilter && !card.items.some(i => (i.canonical || i.name.toLowerCase()) === needFilter)) return false;
+      if (searchQuery.trim()) {
+        const q = searchQuery.toLowerCase();
+        const matchesLoc = card.location.toLowerCase().includes(q);
+        const matchesItem = card.items.some(i => i.name.toLowerCase().includes(q) || (i.canonical ?? "").includes(q));
+        if (!matchesLoc && !matchesItem) return false;
+      }
+      return true;
+    });
+  }, [locationCards, locationFilter, needFilter, searchQuery]);
 
   const handleToggleItemPacked = (locationKey: string, itemKey: string) => {
     const card = locationCards.find(c => c.locationKey === locationKey);
@@ -421,8 +556,73 @@ export function Dashboard() {
             )}
           </div>
 
+          <div className="flex flex-wrap gap-3 mb-6">
+            <div className="relative flex-1 min-w-[180px]">
+              <Search
+                className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 pointer-events-none"
+                style={{ color: "var(--color-ash)" }}
+              />
+              <input
+                type="text"
+                placeholder="search location or need…"
+                value={searchQuery}
+                onChange={e => setSearchQuery(e.target.value)}
+                className="w-full pl-9 pr-3 py-2 rounded-lg text-sm outline-none"
+                style={{
+                  background: "var(--color-paper)",
+                  border: "1px solid var(--color-paper-edge)",
+                  color: "var(--color-ink)",
+                }}
+              />
+            </div>
+
+            <div className="relative">
+              <MapPin
+                className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 pointer-events-none"
+                style={{ color: "var(--color-ash)" }}
+              />
+              <select
+                value={locationFilter}
+                onChange={e => setLocationFilter(e.target.value)}
+                className="pl-9 pr-8 py-2 rounded-lg text-sm appearance-none outline-none cursor-pointer"
+                style={{
+                  background: "var(--color-paper)",
+                  border: "1px solid var(--color-paper-edge)",
+                  color: locationFilter ? "var(--color-ink)" : "var(--color-ash)",
+                }}
+              >
+                <option value="">all locations</option>
+                {locationOptions.map(loc => (
+                  <option key={loc} value={loc}>{loc}</option>
+                ))}
+              </select>
+            </div>
+
+            <SearchableSelect
+              value={needFilter}
+              onChange={setNeedFilter}
+              options={needOptions}
+              placeholder="all needs"
+              icon={<Tag className="w-4 h-4" />}
+            />
+
+            {(searchQuery || locationFilter || needFilter) && (
+              <button
+                onClick={() => { setSearchQuery(""); setLocationFilter(""); setNeedFilter(""); }}
+                className="px-3 py-2 rounded-lg text-sm"
+                style={{
+                  background: "var(--color-paper)",
+                  border: "1px solid var(--color-paper-edge)",
+                  color: "var(--color-ash)",
+                }}
+              >
+                clear
+              </button>
+            )}
+          </div>
+
           <div className="grid grid-cols-1 md:grid-cols-2 2xl:grid-cols-3 gap-6 pb-20">
-            {locationCards.map(card => (
+            {filteredCards.map(card => (
               <LocationCardComponent
                 key={card.locationKey}
                 card={card}
@@ -433,6 +633,23 @@ export function Dashboard() {
               />
             ))}
           </div>
+
+          {filteredCards.length === 0 && locationCards.length > 0 && (
+            <div className="py-24 text-center flex flex-col items-center justify-center">
+              <div
+                className="w-20 h-20 rounded-full flex items-center justify-center mb-6"
+                style={{ background: "var(--color-paper)", color: "var(--color-ash)" }}
+              >
+                <Search className="w-10 h-10" strokeWidth={1.75} />
+              </div>
+              <h2 className="font-display font-bold mb-2" style={{ fontSize: 26, color: "var(--color-ink-soft)", letterSpacing: "-0.02em" }}>
+                no matches
+              </h2>
+              <p className="text-sm" style={{ color: "var(--color-ash)" }}>
+                no dispatches match the active filters.
+              </p>
+            </div>
+          )}
 
           {locationCards.length === 0 && (
             <div className="py-24 text-center flex flex-col items-center justify-center">

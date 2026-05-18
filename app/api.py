@@ -24,7 +24,7 @@ from engine.ollama_client import call_ollama, call_ollama_batch, node_pool, _req
 from engine.extraction.parser import parse_response
 from engine.extraction.validator import validate_and_canonicalize
 from engine.extraction.reply_checker import check_reply_needed
-from prompts.extraction_prompt import build_extraction_prompt, _get_shared_prefix
+from prompts.extraction_prompt import build_extraction_prompt, build_reply_upgrade_prompt, _get_shared_prefix
 
 try:
     import jwt as _jwt
@@ -799,11 +799,11 @@ def _run_reply_draft_bg(msg_id: int, content: str):
                     return
 
             result = _request_single(
-                build_extraction_prompt(content),
+                build_reply_upgrade_prompt(content),
                 temperature=0.0,
                 url=node.url,
                 num_gpu=node.num_gpu,
-                prefix_cached=node.prefix_cached,
+                prefix_cached=False,
             )
 
         parsed = parse_response(result.response)

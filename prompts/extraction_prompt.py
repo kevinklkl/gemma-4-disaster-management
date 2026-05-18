@@ -86,6 +86,32 @@ Message: "Brgy Mabolo kailangan namin 10 sacks ng bigas at 200 lata ng sardinas 
 Extraction: {"loc":"Brgy Mabolo","urg":"H","pax":80,"items":[{"txt":"bigas","qty":10,"u":"sacks"},{"txt":"sardinas","qty":200,"u":"cans"}],"rep":null}
 """
 
+# ── Reply-upgrade variant: rep is always required ────────────────────────────
+# Used by _run_reply_draft_bg when reply_needed=1. Gemma must always write a
+# rep string — the ticket responder needs a draft to send, never null.
+
+_UPGRADE_SCHEMA = 'SCHEMA:\n{"loc":<str|null>,"urg":"L|M|H|C","pax":<int|null>,"items":[{"txt":<str>,"qty":<int|null>,"u":<str|null>}],"rep":<str>}\n'
+
+_UPGRADE_REP_RULE = '- rep: REQUIRED. Short (1-2 sentence) SMS reply draft. Same language as the message. Always a string — never null. Acknowledge receipt, confirm what was understood, and ask for any missing info (location, quantity, etc.).\n'
+
+_UPGRADE_EXAMPLES = """\
+EXAMPLES:
+Message: "Brgy 7 San Jose, kailangan namin ng tubig at bigas para sa 50 katao."
+Extraction: {"loc":"Brgy 7 San Jose","urg":"H","pax":50,"items":[{"txt":"tubig","qty":null,"u":null},{"txt":"bigas","qty":null,"u":null}],"rep":"Natanggap po. Inaasikaso na namin ang inyong kahilingan para sa tubig at bigas para sa 50 katao sa Brgy 7 San Jose."}
+
+Message: "TULONG! Naipit kami sa Brgy Bagumbayan, walang makain 2 days na"
+Extraction: {"loc":"Brgy Bagumbayan","urg":"C","pax":null,"items":[],"rep":"Natanggap po ang inyong mensahe — ipapadala na ang tulong sa Brgy Bagumbayan. Ilang tao ang nangangailangan ng pagkain?"}
+
+Message: "sir/mam ung anti-rejection meds ng tito ko ubos bkas."
+Extraction: {"loc":null,"urg":"H","pax":1,"items":[{"txt":"anti-rejection meds","qty":null,"u":null}],"rep":"Natanggap po ang inyong mensahe. Maaari po bang sabihin ang inyong lokasyon para makatulong agad?"}
+
+Message: "we only have rice left. need drinking water fast for 3 families."
+Extraction: {"loc":null,"urg":"H","pax":15,"items":[{"txt":"drinking water","qty":null,"u":null}],"rep":"Message received. Could you share your location so we can send drinking water for 3 families right away?"}
+
+Message: "Brgy Mabolo kailangan namin 10 sacks ng bigas at 200 lata ng sardinas para sa 80 katao."
+Extraction: {"loc":"Brgy Mabolo","urg":"H","pax":80,"items":[{"txt":"bigas","qty":10,"u":"sacks"},{"txt":"sardinas","qty":200,"u":"cans"}],"rep":"Natanggap po. Pinoproseso na ang inyong kahilingan para sa 10 sacks ng bigas at 200 lata ng sardinas para sa 80 katao sa Brgy Mabolo."}
+"""
+
 
 # ── Batch: no rep (saves ~40 tokens per item, prevents Android truncation) ───
 
@@ -121,6 +147,28 @@ def build_extraction_prompt(content: str) -> str:
         f"JSON:"
     )
     return _get_shared_prefix() + suffix
+
+
+def build_reply_upgrade_prompt(content: str) -> str:
+    """Single-message prompt for the reply-draft upgrade path.
+
+    Identical to the standard single-message prompt except rep is always
+    required (never null). Used when reply_needed=1 — the responder needs a
+    draft to send regardless of whether location is known.
+    """
+    prefix = (
+        f"{_HEADER_BASE}"
+        f"{_UPGRADE_SCHEMA}"
+        f"{_FOOTER_BASE}"
+        f"{_UPGRADE_REP_RULE}\n"
+        f"{_UPGRADE_EXAMPLES}\n"
+    )
+    suffix = (
+        f"TASK: Extract the following single message. Return ONLY the JSON object.\n\n"
+        f'Message: "{content}"\n'
+        f"JSON:"
+    )
+    return prefix + suffix
 
 
 def build_batch_prompt(messages: list[str]) -> str:
