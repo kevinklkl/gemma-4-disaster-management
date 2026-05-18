@@ -1,10 +1,6 @@
 fastapi
 uvicorn[standard]
 websockets
-pandas
 pydantic
-ollama
 requests
-openai-whisper
 zeroconf
-PyJWT
