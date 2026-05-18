@@ -77,7 +77,11 @@ export function Settings() {
     }
   }, [token]);
 
-  useEffect(() => { fetchAll(); }, [fetchAll]);
+  useEffect(() => {
+    fetchAll();
+    const id = setInterval(fetchAll, 10_000);
+    return () => clearInterval(id);
+  }, [fetchAll]);
 
   async function refresh() {
     setRefreshing(true);

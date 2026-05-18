@@ -40,82 +40,83 @@ RULES:
 - Split compound requests into separate items.
 - qty: INT only. Extract only if explicit.
 - u: EXACT unit (cans, sacks, L, packs). null if unspecified.
+- cat: Item category. One of: food, water, hygiene, shelter, clothing, medical, baby, elderly, disability, household, education, protection. null if unclear.
 - Empty items [] is valid if no specific physical goods are requested.
 """
 
 _EXAMPLES_BASE = """\
 EXAMPLES:
 Message: "Brgy 7 San Jose, kailangan namin ng tubig at bigas para sa 50 katao."
-Extraction: {"loc":"Brgy 7 San Jose","urg":"H","pax":50,"items":[{"txt":"tubig","qty":null,"u":null},{"txt":"bigas","qty":null,"u":null}]}
+Extraction: {"loc":"Brgy 7 San Jose","urg":"H","pax":50,"items":[{"txt":"tubig","qty":null,"u":null,"cat":"water"},{"txt":"bigas","qty":null,"u":null,"cat":"food"}]}
 
 Message: "TULONG! Naipit kami sa Brgy Bagumbayan, walang makain 2 days na"
 Extraction: {"loc":"Brgy Bagumbayan","urg":"C","pax":null,"items":[]}
 
 Message: "sir/mam ung anti-rejection meds ng tito ko ubos bkas."
-Extraction: {"loc":null,"urg":"H","pax":1,"items":[{"txt":"anti-rejection meds","qty":null,"u":null}]}
+Extraction: {"loc":null,"urg":"H","pax":1,"items":[{"txt":"anti-rejection meds","qty":null,"u":null,"cat":"medical"}]}
 
 Message: "we only have rice left. need drinking water fast for 3 families."
-Extraction: {"loc":null,"urg":"H","pax":15,"items":[{"txt":"drinking water","qty":null,"u":null}]}
+Extraction: {"loc":null,"urg":"H","pax":15,"items":[{"txt":"drinking water","qty":null,"u":null,"cat":"water"}]}
 
 Message: "Brgy Mabolo kailangan namin 10 sacks ng bigas at 200 lata ng sardinas para sa 80 katao."
-Extraction: {"loc":"Brgy Mabolo","urg":"H","pax":80,"items":[{"txt":"bigas","qty":10,"u":"sacks"},{"txt":"sardinas","qty":200,"u":"cans"}]}
+Extraction: {"loc":"Brgy Mabolo","urg":"H","pax":80,"items":[{"txt":"bigas","qty":10,"u":"sacks","cat":"food"},{"txt":"sardinas","qty":200,"u":"cans","cat":"food"}]}
 """
 
 
 # ── Single-message: includes rep ─────────────────────────────────────────────
 
-_SINGLE_SCHEMA = 'SCHEMA:\n{"loc":<str|null>,"urg":"L|M|H|C","pax":<int|null>,"items":[{"txt":<str>,"qty":<int|null>,"u":<str|null>}],"rep":<null|str>}\n'
+_SINGLE_SCHEMA = 'SCHEMA:\n{"loc":<str|null>,"urg":"L|M|H|C","pax":<int|null>,"items":[{"txt":<str>,"qty":<int|null>,"u":<str|null>,"cat":<str|null>}],"rep":<null|str>}\n'
 
 _SINGLE_REP_RULE = '- rep: Short (1-2 sentence) SMS reply draft. Same language as the message. null if request is clear and location is known. String if location is missing, message is an inquiry, or critical info is unclear — acknowledge receipt and ask for what\'s missing.\n'
 
 _SINGLE_EXAMPLES = """\
 EXAMPLES:
 Message: "Brgy 7 San Jose, kailangan namin ng tubig at bigas para sa 50 katao."
-Extraction: {"loc":"Brgy 7 San Jose","urg":"H","pax":50,"items":[{"txt":"tubig","qty":null,"u":null},{"txt":"bigas","qty":null,"u":null}],"rep":null}
+Extraction: {"loc":"Brgy 7 San Jose","urg":"H","pax":50,"items":[{"txt":"tubig","qty":null,"u":null,"cat":"water"},{"txt":"bigas","qty":null,"u":null,"cat":"food"}],"rep":null}
 
 Message: "TULONG! Naipit kami sa Brgy Bagumbayan, walang makain 2 days na"
 Extraction: {"loc":"Brgy Bagumbayan","urg":"C","pax":null,"items":[],"rep":null}
 
 Message: "sir/mam ung anti-rejection meds ng tito ko ubos bkas."
-Extraction: {"loc":null,"urg":"H","pax":1,"items":[{"txt":"anti-rejection meds","qty":null,"u":null}],"rep":"Natanggap po ang inyong mensahe. Maaari po bang sabihin ang inyong lokasyon para makatulong agad?"}
+Extraction: {"loc":null,"urg":"H","pax":1,"items":[{"txt":"anti-rejection meds","qty":null,"u":null,"cat":"medical"}],"rep":"Natanggap po ang inyong mensahe. Maaari po bang sabihin ang inyong lokasyon para makatulong agad?"}
 
 Message: "we only have rice left. need drinking water fast for 3 families."
-Extraction: {"loc":null,"urg":"H","pax":15,"items":[{"txt":"drinking water","qty":null,"u":null}],"rep":"Message received. Could you share your location so we can send help right away?"}
+Extraction: {"loc":null,"urg":"H","pax":15,"items":[{"txt":"drinking water","qty":null,"u":null,"cat":"water"}],"rep":"Message received. Could you share your location so we can send help right away?"}
 
 Message: "Brgy Mabolo kailangan namin 10 sacks ng bigas at 200 lata ng sardinas para sa 80 katao."
-Extraction: {"loc":"Brgy Mabolo","urg":"H","pax":80,"items":[{"txt":"bigas","qty":10,"u":"sacks"},{"txt":"sardinas","qty":200,"u":"cans"}],"rep":null}
+Extraction: {"loc":"Brgy Mabolo","urg":"H","pax":80,"items":[{"txt":"bigas","qty":10,"u":"sacks","cat":"food"},{"txt":"sardinas","qty":200,"u":"cans","cat":"food"}],"rep":null}
 """
 
 # ── Reply-upgrade variant: rep is always required ────────────────────────────
 # Used by _run_reply_draft_bg when reply_needed=1. Gemma must always write a
 # rep string — the ticket responder needs a draft to send, never null.
 
-_UPGRADE_SCHEMA = 'SCHEMA:\n{"loc":<str|null>,"urg":"L|M|H|C","pax":<int|null>,"items":[{"txt":<str>,"qty":<int|null>,"u":<str|null>}],"rep":<str>}\n'
+_UPGRADE_SCHEMA = 'SCHEMA:\n{"loc":<str|null>,"urg":"L|M|H|C","pax":<int|null>,"items":[{"txt":<str>,"qty":<int|null>,"u":<str|null>,"cat":<str|null>}],"rep":<str>}\n'
 
 _UPGRADE_REP_RULE = '- rep: REQUIRED. Short (1-2 sentence) SMS reply draft. Same language as the message. Always a string — never null. Acknowledge receipt, confirm what was understood, and ask for any missing info (location, quantity, etc.).\n'
 
 _UPGRADE_EXAMPLES = """\
 EXAMPLES:
 Message: "Brgy 7 San Jose, kailangan namin ng tubig at bigas para sa 50 katao."
-Extraction: {"loc":"Brgy 7 San Jose","urg":"H","pax":50,"items":[{"txt":"tubig","qty":null,"u":null},{"txt":"bigas","qty":null,"u":null}],"rep":"Natanggap po. Inaasikaso na namin ang inyong kahilingan para sa tubig at bigas para sa 50 katao sa Brgy 7 San Jose."}
+Extraction: {"loc":"Brgy 7 San Jose","urg":"H","pax":50,"items":[{"txt":"tubig","qty":null,"u":null,"cat":"water"},{"txt":"bigas","qty":null,"u":null,"cat":"food"}],"rep":"Natanggap po. Inaasikaso na namin ang inyong kahilingan para sa tubig at bigas para sa 50 katao sa Brgy 7 San Jose."}
 
 Message: "TULONG! Naipit kami sa Brgy Bagumbayan, walang makain 2 days na"
 Extraction: {"loc":"Brgy Bagumbayan","urg":"C","pax":null,"items":[],"rep":"Natanggap po ang inyong mensahe — ipapadala na ang tulong sa Brgy Bagumbayan. Ilang tao ang nangangailangan ng pagkain?"}
 
 Message: "sir/mam ung anti-rejection meds ng tito ko ubos bkas."
-Extraction: {"loc":null,"urg":"H","pax":1,"items":[{"txt":"anti-rejection meds","qty":null,"u":null}],"rep":"Natanggap po ang inyong mensahe. Maaari po bang sabihin ang inyong lokasyon para makatulong agad?"}
+Extraction: {"loc":null,"urg":"H","pax":1,"items":[{"txt":"anti-rejection meds","qty":null,"u":null,"cat":"medical"}],"rep":"Natanggap po ang inyong mensahe. Maaari po bang sabihin ang inyong lokasyon para makatulong agad?"}
 
 Message: "we only have rice left. need drinking water fast for 3 families."
-Extraction: {"loc":null,"urg":"H","pax":15,"items":[{"txt":"drinking water","qty":null,"u":null}],"rep":"Message received. Could you share your location so we can send drinking water for 3 families right away?"}
+Extraction: {"loc":null,"urg":"H","pax":15,"items":[{"txt":"drinking water","qty":null,"u":null,"cat":"water"}],"rep":"Message received. Could you share your location so we can send drinking water for 3 families right away?"}
 
 Message: "Brgy Mabolo kailangan namin 10 sacks ng bigas at 200 lata ng sardinas para sa 80 katao."
-Extraction: {"loc":"Brgy Mabolo","urg":"H","pax":80,"items":[{"txt":"bigas","qty":10,"u":"sacks"},{"txt":"sardinas","qty":200,"u":"cans"}],"rep":"Natanggap po. Pinoproseso na ang inyong kahilingan para sa 10 sacks ng bigas at 200 lata ng sardinas para sa 80 katao sa Brgy Mabolo."}
+Extraction: {"loc":"Brgy Mabolo","urg":"H","pax":80,"items":[{"txt":"bigas","qty":10,"u":"sacks","cat":"food"},{"txt":"sardinas","qty":200,"u":"cans","cat":"food"}],"rep":"Natanggap po. Pinoproseso na ang inyong kahilingan para sa 10 sacks ng bigas at 200 lata ng sardinas para sa 80 katao sa Brgy Mabolo."}
 """
 
 
 # ── Batch: no rep (saves ~40 tokens per item, prevents Android truncation) ───
 
-_BATCH_SCHEMA = 'SCHEMA:\n{"loc":<str|null>,"urg":"L|M|H|C","pax":<int|null>,"items":[{"txt":<str>,"qty":<int|null>,"u":<str|null>}]}\n'
+_BATCH_SCHEMA = 'SCHEMA:\n{"loc":<str|null>,"urg":"L|M|H|C","pax":<int|null>,"items":[{"txt":<str>,"qty":<int|null>,"u":<str|null>,"cat":<str|null>}]}\n'
 
 
 def _get_shared_prefix() -> str:

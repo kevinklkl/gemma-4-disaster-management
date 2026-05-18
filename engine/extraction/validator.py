@@ -24,6 +24,12 @@ Urgency = Literal["low", "medium", "high", "critical"]
 
 _URGENCY_EXPAND = {"l": "low", "m": "medium", "h": "high", "c": "critical"}
 
+_VALID_CATEGORIES = {
+    "food", "water", "hygiene", "shelter", "clothing",
+    "medical", "baby", "elderly", "disability", "household",
+    "education", "protection",
+}
+
 
 class _RawItem(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
@@ -33,6 +39,7 @@ class _RawItem(BaseModel):
     canonical: Optional[str] = Field(None, alias="can")
     qty: Optional[int] = None
     unit: Optional[str] = Field(None, alias="u")
+    category: Optional[str] = Field(None, alias="cat")
 
     @field_validator("qty", mode="before")
     @classmethod
@@ -124,10 +131,13 @@ def validate_and_canonicalize(payload: dict) -> dict:
         display = label_for(chosen) or (original or "(unknown item)")
         unit = item.unit or unit_for(chosen)
 
+        category = item.category if item.category in _VALID_CATEGORIES else None
+
         cleaned_items.append({
             "name": display,
             "raw_text": original or None,
             "canonical": chosen,
+            "category": category,
             "qty": item.qty,
             "unit": unit,
             "estimated": False,

@@ -7,6 +7,7 @@ export type ApiExtractedItem = {
   name: string;
   qty: number | null;
   canonical?: string | null;
+  category?: string | null;
   raw_text?: string | null;
   unit?: string | null;
 };
@@ -44,6 +45,7 @@ export type AggregatedItem = {
   key: string;
   name: string;
   canonical: string | null;
+  category: string | null;
   unit: string | null;
   totalQty: number | null;
   totalPacked: number;

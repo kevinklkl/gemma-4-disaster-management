@@ -351,7 +351,6 @@ function TicketCard({
   }
 
   async function approve() {
-    if (needsReply && !draft.trim()) return;
     setApproving(true);
     if (draft.trim() && saveTimer.current) {
       clearTimeout(saveTimer.current);
@@ -471,7 +470,7 @@ function TicketCard({
           <div className="flex justify-end">
             <button
               onClick={approve}
-              disabled={approving || (needsReply && !draft.trim())}
+              disabled={approving}
               className="inline-flex items-center gap-1.5 rounded-md py-2 px-4 text-sm font-semibold disabled:opacity-50 transition-colors"
               style={{ background: "var(--color-dagat)", color: "var(--color-bone)" }}
             >

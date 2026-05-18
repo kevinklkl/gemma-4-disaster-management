@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useMemo } from "react";
+import { createPortal } from "react-dom";
 import { TopNav } from "../components/TopNav";
 import { MobileNav } from "../components/MobileNav";
 import { LocationCard as LocationCardComponent } from "../components/LocationCard";
@@ -7,107 +8,141 @@ import type { ApiMessage, ApiLocation, LocationCard, AggregatedItem, ItemSource 
 
 const URGENCY_WEIGHT: Record<string, number> = { critical: 4, high: 3, medium: 2, low: 1 };
 
-function SearchableSelect({
+const CATEGORIES: [string, string][] = [
+  ["food",       "Food assistance"],
+  ["water",      "WASH / water supplies"],
+  ["hygiene",    "WASH / hygiene items"],
+  ["shelter",    "Shelter items"],
+  ["clothing",   "Clothing"],
+  ["medical",    "Health / medical"],
+  ["baby",       "Infant and child care"],
+  ["elderly",    "Older persons' care"],
+  ["disability", "Assistive devices"],
+  ["household",  "Non-food items / NFIs"],
+  ["education",  "Education supplies"],
+  ["protection", "Protection items"],
+];
+
+function CategoryFilter({
   value,
   onChange,
-  options,
-  placeholder,
-  icon,
 }: {
-  value: string;
-  onChange: (v: string) => void;
-  options: [string, string][];
-  placeholder: string;
-  icon: React.ReactNode;
+  value: Set<string>;
+  onChange: (v: Set<string>) => void;
 }) {
   const [open, setOpen] = useState(false);
-  const [query, setQuery] = useState("");
-  const containerRef = useRef<HTMLDivElement>(null);
+  const [rect, setRect] = useState<DOMRect | null>(null);
+  const btnRef = useRef<HTMLButtonElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
 
-  const filtered = options.filter(([, label]) => label.toLowerCase().includes(query.toLowerCase()));
-  const selectedLabel = options.find(([k]) => k === value)?.[1];
+  const toggle = (key: string) => {
+    const next = new Set(value);
+    next.has(key) ? next.delete(key) : next.add(key);
+    onChange(next);
+  };
+
+  const openDropdown = () => {
+    if (btnRef.current) setRect(btnRef.current.getBoundingClientRect());
+    setOpen(true);
+  };
 
   useEffect(() => {
-    if (!open) setQuery("");
+    if (!open) return;
+    const close = (e: MouseEvent) => {
+      if (
+        !btnRef.current?.contains(e.target as Node) &&
+        !panelRef.current?.contains(e.target as Node)
+      ) setOpen(false);
+    };
+    document.addEventListener("mousedown", close);
+    return () => document.removeEventListener("mousedown", close);
   }, [open]);
 
-  useEffect(() => {
-    const handler = (e: MouseEvent) => {
-      if (containerRef.current && !containerRef.current.contains(e.target as Node)) setOpen(false);
-    };
-    document.addEventListener("mousedown", handler);
-    return () => document.removeEventListener("mousedown", handler);
-  }, []);
+  const label = value.size === 0
+    ? "all categories"
+    : value.size === 1
+      ? (CATEGORIES.find(([k]) => value.has(k))?.[1] ?? "1 category")
+      : `${value.size} categories`;
 
   return (
-    <div ref={containerRef} className="relative">
+    <>
       <button
-        onClick={() => setOpen(o => !o)}
-        className="flex items-center pl-9 pr-3 py-2 rounded-lg text-sm gap-1"
+        ref={btnRef}
+        onClick={() => open ? setOpen(false) : openDropdown()}
+        className="relative flex items-center pl-9 pr-3 py-2 rounded-lg text-sm gap-1 whitespace-nowrap"
         style={{
           background: "var(--color-paper)",
           border: "1px solid var(--color-paper-edge)",
-          color: value ? "var(--color-ink)" : "var(--color-ash)",
+          color: value.size > 0 ? "var(--color-ink)" : "var(--color-ash)",
         }}
       >
         <span className="absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" style={{ color: "var(--color-ash)" }}>
-          {icon}
+          <Tag className="w-4 h-4" />
         </span>
-        {selectedLabel ?? placeholder}
+        {label}
       </button>
 
-      {open && (
+      {open && rect && createPortal(
         <div
-          className="absolute top-full mt-1 left-0 z-50 rounded-lg overflow-hidden"
+          ref={panelRef}
           style={{
-            minWidth: 200,
+            position: "fixed",
+            top: rect.bottom + 4,
+            left: rect.left,
+            width: 220,
+            zIndex: 9999,
             background: "var(--color-paper)",
             border: "1px solid var(--color-paper-edge)",
+            borderRadius: 8,
             boxShadow: "0 4px 16px rgba(0,0,0,0.12)",
+            overflow: "hidden",
           }}
         >
-          <div className="p-2" style={{ borderBottom: "1px solid var(--color-paper-edge)" }}>
-            <input
-              autoFocus
-              type="text"
-              placeholder="search…"
-              value={query}
-              onChange={e => setQuery(e.target.value)}
-              className="w-full px-2 py-1.5 rounded text-sm outline-none"
-              style={{
-                background: "var(--color-surface-container-low)",
-                border: "1px solid var(--color-paper-edge)",
-                color: "var(--color-ink)",
-              }}
-            />
-          </div>
-          <div className="overflow-y-auto" style={{ maxHeight: 220 }}>
-            <button
-              className="w-full text-left px-3 py-2 text-sm hover:opacity-70"
-              style={{ color: !value ? "var(--color-ink)" : "var(--color-ash)" }}
-              onClick={() => { onChange(""); setOpen(false); }}
-            >
-              {placeholder}
-            </button>
-            {filtered.map(([key, label]) => (
+          <div className="overflow-y-auto" style={{ maxHeight: 280 }}>
+            {value.size > 0 && (
               <button
-                key={key}
-                className="w-full text-left px-3 py-2 text-sm hover:opacity-70"
-                style={{ color: key === value ? "var(--color-damay)" : "var(--color-ink)" }}
-                onClick={() => { onChange(key); setOpen(false); }}
+                className="w-full text-left px-3 py-2 text-xs font-semibold hover:opacity-70"
+                style={{ color: "var(--color-ash)", borderBottom: "1px solid var(--color-paper-edge)" }}
+                onClick={() => onChange(new Set())}
               >
-                {label}
+                clear all
               </button>
-            ))}
-            {filtered.length === 0 && (
-              <p className="px-3 py-2 text-sm" style={{ color: "var(--color-ash)" }}>no matches</p>
             )}
+            {CATEGORIES.map(([key, label]) => {
+              const checked = value.has(key);
+              return (
+                <button
+                  key={key}
+                  onClick={() => toggle(key)}
+                  className="w-full text-left px-3 py-2 text-sm flex items-center gap-2.5 hover:opacity-70"
+                  style={{ color: "var(--color-ink)" }}
+                >
+                  <span
+                    className="w-3.5 h-3.5 rounded shrink-0 flex items-center justify-center"
+                    style={{
+                      border: `1.5px solid ${checked ? "var(--color-damay)" : "var(--color-paper-edge)"}`,
+                      background: checked ? "var(--color-damay)" : "transparent",
+                    }}
+                  >
+                    {checked && (
+                      <svg width="8" height="8" viewBox="0 0 8 8" fill="none">
+                        <path d="M1.5 4L3 5.5L6.5 2" stroke="white" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+                      </svg>
+                    )}
+                  </span>
+                  {label}
+                </button>
+              );
+            })}
           </div>
-        </div>
+        </div>,
+        document.body
       )}
-    </div>
+    </>
   );
 }
+
+
 
 function formatLocation(loc: ApiLocation): string {
   if (!loc) return "Unknown";
@@ -188,6 +223,7 @@ function aggregateByLocation(messages: ApiMessage[]): LocationCard[] {
             key: mapKey,
             name: item.name,
             canonical: item.canonical ?? null,
+            category: item.category ?? null,
             unit: item.unit ?? null,
             totalQty: item.qty,
             totalPacked: packedQty,
@@ -259,7 +295,7 @@ export function Dashboard() {
   const [now, setNow] = useState(Date.now());
   const [searchQuery, setSearchQuery] = useState("");
   const [locationFilter, setLocationFilter] = useState("");
-  const [needFilter, setNeedFilter] = useState("");
+  const [categoryFilters, setCategoryFilters] = useState<Set<string>>(new Set());
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectRef = useRef(true);
   const packingTimers = useRef(new Map<string, ReturnType<typeof setTimeout>>());
@@ -340,21 +376,10 @@ export function Dashboard() {
     return Array.from(locs).sort();
   }, [locationCards]);
 
-  const needOptions = useMemo(() => {
-    const seen = new Map<string, string>();
-    for (const card of locationCards) {
-      for (const item of card.items) {
-        const key = item.canonical || item.name.toLowerCase();
-        if (!seen.has(key)) seen.set(key, item.name);
-      }
-    }
-    return Array.from(seen.entries()).sort((a, b) => a[1].localeCompare(b[1]));
-  }, [locationCards]);
-
   const filteredCards = useMemo(() => {
     return locationCards.filter(card => {
       if (locationFilter && card.location !== locationFilter) return false;
-      if (needFilter && !card.items.some(i => (i.canonical || i.name.toLowerCase()) === needFilter)) return false;
+      if (categoryFilters.size > 0 && !card.items.some(i => i.category != null && categoryFilters.has(i.category))) return false;
       if (searchQuery.trim()) {
         const q = searchQuery.toLowerCase();
         const matchesLoc = card.location.toLowerCase().includes(q);
@@ -363,7 +388,7 @@ export function Dashboard() {
       }
       return true;
     });
-  }, [locationCards, locationFilter, needFilter, searchQuery]);
+  }, [locationCards, locationFilter, categoryFilters, searchQuery]);
 
   const handleToggleItemPacked = (locationKey: string, itemKey: string) => {
     const card = locationCards.find(c => c.locationKey === locationKey);
@@ -598,17 +623,14 @@ export function Dashboard() {
               </select>
             </div>
 
-            <SearchableSelect
-              value={needFilter}
-              onChange={setNeedFilter}
-              options={needOptions}
-              placeholder="all needs"
-              icon={<Tag className="w-4 h-4" />}
+            <CategoryFilter
+              value={categoryFilters}
+              onChange={setCategoryFilters}
             />
 
-            {(searchQuery || locationFilter || needFilter) && (
+            {(searchQuery || locationFilter || categoryFilters.size > 0) && (
               <button
-                onClick={() => { setSearchQuery(""); setLocationFilter(""); setNeedFilter(""); }}
+                onClick={() => { setSearchQuery(""); setLocationFilter(""); setCategoryFilters(new Set()); }}
                 className="px-3 py-2 rounded-lg text-sm"
                 style={{
                   background: "var(--color-paper)",
