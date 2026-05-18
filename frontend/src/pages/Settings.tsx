@@ -1,7 +1,5 @@
 import { useEffect, useState, useCallback } from "react";
-import { useNavigate } from "react-router-dom";
-import { Cpu, Users, BarChart2, RefreshCw, Circle, CheckCircle2, Clock, Inbox } from "lucide-react";
-import { useAuth, authHeaders } from "../context/AuthContext";
+import { Cpu, Users, BarChart2, RefreshCw, Circle, CheckCircle2, Inbox } from "lucide-react";
 import { TopNav } from "../components/TopNav";
 
 const API_BASE = import.meta.env.VITE_API_URL || `http://${window.location.hostname}:8000`;
@@ -27,12 +25,10 @@ type AdminStats = {
   nodes: Node[];
 };
 
-type User = {
-  id: number;
-  username: string;
-  role: string;
-  isActive: boolean;
-  available: boolean;
+type Device = {
+  id: string;
+  name: string;
+  receiving: boolean;
   ticketsPending: number;
   ticketsApproved: number;
 };
@@ -51,31 +47,24 @@ function StatCard({ label, value, sub }: { label: string; value: number; sub?: s
 }
 
 export function Settings() {
-  const { user, token, isInitializing } = useAuth();
-  const navigate = useNavigate();
   const [stats, setStats] = useState<AdminStats | null>(null);
-  const [users, setUsers] = useState<User[]>([]);
+  const [devices, setDevices] = useState<Device[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
 
-  useEffect(() => {
-    if (!isInitializing && (!user || user.role !== "admin")) navigate("/", { replace: true });
-  }, [isInitializing, user, navigate]);
-
   const fetchAll = useCallback(async () => {
-    if (!token) return;
     try {
-      const [statsRes, usersRes] = await Promise.all([
-        fetch(`${API_BASE}/api/admin/stats`, { headers: authHeaders(token) }),
-        fetch(`${API_BASE}/auth/users`, { headers: authHeaders(token) }),
+      const [statsRes, devicesRes] = await Promise.all([
+        fetch(`${API_BASE}/api/admin/stats`),
+        fetch(`${API_BASE}/devices`),
       ]);
       if (statsRes.ok) setStats(await statsRes.json());
-      if (usersRes.ok) setUsers(await usersRes.json());
+      if (devicesRes.ok) setDevices(await devicesRes.json());
     } finally {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [token]);
+  }, []);
 
   useEffect(() => {
     fetchAll();
@@ -88,9 +77,6 @@ export function Settings() {
     await fetchAll();
   }
 
-  if (!user || user.role !== "admin") return null;
-
-  const responders = users.filter(u => u.isActive);
   const nodes = stats?.nodes ?? [];
 
   return (
@@ -108,7 +94,7 @@ export function Settings() {
               settings
             </h1>
             <p className="text-sm" style={{ color: "var(--color-ash)" }}>
-              nodes, responders, and system stats.
+              nodes, devices, and system stats.
             </p>
           </div>
           <button
@@ -143,7 +129,7 @@ export function Settings() {
               </div>
               <div className="grid grid-cols-3 gap-3">
                 <StatCard label="tickets pending" value={stats?.ticketsPendingApproval ?? 0} sub="assigned, waiting for approval" />
-                <StatCard label="tickets queued" value={stats?.ticketsQueued ?? 0} sub="waiting for a responder" />
+                <StatCard label="tickets queued" value={stats?.ticketsQueued ?? 0} sub="waiting for a device" />
                 <StatCard label="tickets approved" value={stats?.ticketsApproved ?? 0} sub="approved and archived" />
               </div>
             </section>
@@ -211,16 +197,16 @@ export function Settings() {
               )}
             </section>
 
-            {/* ── Responders ── */}
+            {/* ── Devices ── */}
             <section>
               <div className="flex items-center gap-2 mb-4">
                 <Users className="w-4 h-4" strokeWidth={1.75} style={{ color: "var(--color-ash)" }} />
                 <h2 className="font-semibold text-sm" style={{ color: "var(--color-ash)" }}>
-                  responders ({responders.length})
+                  devices ({devices.length})
                 </h2>
               </div>
-              {responders.length === 0 ? (
-                <p className="text-sm" style={{ color: "var(--color-ash)" }}>no responder accounts yet.</p>
+              {devices.length === 0 ? (
+                <p className="text-sm" style={{ color: "var(--color-ash)" }}>no devices registered yet.</p>
               ) : (
                 <div
                   className="rounded-xl border overflow-hidden"
@@ -229,61 +215,52 @@ export function Settings() {
                   <div
                     className="grid px-5 py-2.5 font-mono text-xs uppercase tracking-wider"
                     style={{
-                      gridTemplateColumns: "1fr 80px 90px 80px 80px",
+                      gridTemplateColumns: "1fr 100px 80px 80px",
                       color: "var(--color-ash)",
                       borderBottom: "1px solid var(--color-paper-edge)",
                       background: "var(--color-paper-deep)",
                     }}
                   >
-                    <span>username</span>
-                    <span className="text-center">role</span>
-                    <span className="text-center">status</span>
+                    <span>device id</span>
+                    <span className="text-center">receiving</span>
                     <span className="text-center">pending</span>
                     <span className="text-center">approved</span>
                   </div>
-                  {responders.map((u, i) => (
+                  {devices.map((d, i) => (
                     <div
-                      key={u.id}
+                      key={d.id}
                       className="grid items-center px-5 py-3.5"
                       style={{
-                        gridTemplateColumns: "1fr 80px 90px 80px 80px",
+                        gridTemplateColumns: "1fr 100px 80px 80px",
                         background: i % 2 === 0 ? "var(--color-paper-warm)" : "var(--color-paper)",
-                        borderBottom: i < responders.length - 1 ? "1px solid var(--color-paper-edge)" : undefined,
+                        borderBottom: i < devices.length - 1 ? "1px solid var(--color-paper-edge)" : undefined,
                       }}
                     >
-                      <div className="flex items-center gap-2">
-                        <span className="font-semibold text-sm" style={{ color: "var(--color-ink)" }}>
-                          {u.username === "_host" ? "host" : u.username}
-                        </span>
-                        {u.username === "_host" && (
-                          <span className="font-mono text-xs px-1.5 py-0.5 rounded" style={{ background: "var(--color-paper-deep)", color: "var(--color-ash)" }}>
-                            admin
-                          </span>
-                        )}
-                      </div>
-                      <span className="text-center font-mono text-xs" style={{ color: "var(--color-ash)" }}>{u.role}</span>
+                      <span className="font-mono text-xs truncate" style={{ color: "var(--color-ink-soft)" }}>
+                        {d.name || d.id}
+                      </span>
                       <div className="flex justify-center">
                         <span
                           className="inline-flex items-center gap-1.5 font-mono text-xs px-2 py-1 rounded-full font-semibold"
                           style={{
-                            background: u.available ? "#dcfce7" : "#fee2e2",
-                            color: u.available ? "#15803d" : "#dc2626",
+                            background: d.receiving ? "#dcfce7" : "#f1f5f9",
+                            color: d.receiving ? "#15803d" : "var(--color-ash)",
                           }}
                         >
                           <Circle className="w-1.5 h-1.5 fill-current" strokeWidth={0} />
-                          {u.available ? "active" : "paused"}
+                          {d.receiving ? "on" : "off"}
                         </span>
                       </div>
                       <div className="flex justify-center items-center gap-1">
                         <Inbox className="w-3 h-3" style={{ color: "var(--color-ash)" }} strokeWidth={1.75} />
-                        <span className="font-semibold text-sm" style={{ color: u.ticketsPending > 0 ? "var(--color-ink)" : "var(--color-ash)" }}>
-                          {u.ticketsPending}
+                        <span className="font-semibold text-sm" style={{ color: d.ticketsPending > 0 ? "var(--color-ink)" : "var(--color-ash)" }}>
+                          {d.ticketsPending}
                         </span>
                       </div>
                       <div className="flex justify-center items-center gap-1">
                         <CheckCircle2 className="w-3 h-3" style={{ color: "var(--color-ash)" }} strokeWidth={1.75} />
                         <span className="font-semibold text-sm" style={{ color: "var(--color-ash)" }}>
-                          {u.ticketsApproved}
+                          {d.ticketsApproved}
                         </span>
                       </div>
                     </div>

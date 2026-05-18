@@ -1,16 +1,8 @@
 import { Link, useLocation } from "react-router-dom";
 import { Plus, Home as HomeIcon, Activity, Network as NetworkIcon, Map as MapIcon, MessageSquare, Clock, HeartHandshake, Settings } from "lucide-react";
 import { Brand } from "./Brand";
-import { useAuth } from "../context/AuthContext";
 
-type Tab = {
-  to: string;
-  label: string;
-  icon: React.ReactNode;
-  adminOnly?: boolean;
-};
-
-const TABS: Tab[] = [
+const TABS = [
   { to: "/",           label: "home",       icon: <HomeIcon className="w-4 h-4" strokeWidth={1.75} /> },
   { to: "/pulso",      label: "pulso",      icon: <Activity className="w-4 h-4" strokeWidth={1.75} /> },
   { to: "/network",    label: "network",    icon: <NetworkIcon className="w-4 h-4" strokeWidth={1.75} /> },
@@ -18,15 +10,13 @@ const TABS: Tab[] = [
   { to: "/tickets",    label: "tickets",    icon: <MessageSquare className="w-4 h-4" strokeWidth={1.75} /> },
   { to: "/history",    label: "history",    icon: <Clock className="w-4 h-4" strokeWidth={1.75} /> },
   { to: "/donor-view", label: "donor view", icon: <HeartHandshake className="w-4 h-4" strokeWidth={1.75} /> },
-  { to: "/settings",   label: "settings",   icon: <Settings className="w-4 h-4" strokeWidth={1.75} />, adminOnly: true },
+  { to: "/settings",   label: "settings",   icon: <Settings className="w-4 h-4" strokeWidth={1.75} /> },
 ];
 
 export function TopNav({ hideNewReport = false }: { hideNewReport?: boolean } = {}) {
   const { pathname } = useLocation();
-  const { user } = useAuth();
-  const isAdmin = user?.role === "admin";
 
-  const visibleTabs = TABS.filter(t => !t.adminOnly || isAdmin);
+  const visibleTabs = TABS;
 
   return (
     <header

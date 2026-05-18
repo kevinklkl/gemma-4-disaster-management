@@ -1,12 +1,11 @@
 import { useEffect, useState, useCallback, useRef } from "react";
-import { useNavigate } from "react-router-dom";
 import {
-  CheckCircle2, Clock, LogOut, ChevronDown, ChevronRight, X,
+  CheckCircle2, Clock, ChevronDown, ChevronRight, X,
   ToggleLeft, ToggleRight, MessageSquare, Plus,
   MoreVertical, Mic, Smartphone, UserCircle, AlertCircle,
   Loader2, ArrowRight, RefreshCw, Timer, Search, Archive,
 } from "lucide-react";
-import { useAuth, authHeaders } from "../context/AuthContext";
+import { useAuth, deviceHeaders } from "../context/AuthContext";
 import { TopNav } from "../components/TopNav";
 import { MobileNav } from "../components/MobileNav";
 import type { ApiMessage } from "../types";
@@ -106,12 +105,12 @@ function ExtractedPanel({
   data: initialData,
   disabled,
   messageId,
-  token,
+  deviceId,
 }: {
   data: ExtractedData;
   disabled?: boolean;
   messageId: string;
-  token: string | null;
+  deviceId: string;
 }) {
   const [data, setData] = useState<ExtractedData>(initialData);
   const [saveState, setSaveState] = useState<"idle" | "saving" | "saved">("idle");
@@ -128,7 +127,7 @@ function ExtractedPanel({
       try {
         await fetch(`${API_BASE}/api/tickets/${messageId}/extracted`, {
           method: "PATCH",
-          headers: { "Content-Type": "application/json", ...authHeaders(token) },
+          headers: { "Content-Type": "application/json", ...deviceHeaders(deviceId) },
           body: JSON.stringify({ extracted_data: next }),
         });
         setSaveState("saved");
@@ -304,11 +303,11 @@ function ExtractedPanel({
 
 function TicketCard({
   msg,
-  token,
+  deviceId,
   onUpdate,
 }: {
   msg: Ticket;
-  token: string | null;
+  deviceId: string;
   onUpdate: () => void;
 }) {
   const [draft, setDraft] = useState(msg.replyDraft || "");
@@ -332,7 +331,7 @@ function TicketCard({
     try {
       await fetch(`${API_BASE}/api/tickets/${msg.id}/reply`, {
         method: "PATCH",
-        headers: { "Content-Type": "application/json", ...authHeaders(token) },
+        headers: { "Content-Type": "application/json", ...deviceHeaders(deviceId) },
         body: JSON.stringify({ reply_draft: value }),
       });
       setSaveState("saved");
@@ -359,7 +358,7 @@ function TicketCard({
     try {
       await fetch(`${API_BASE}/api/tickets/${msg.id}/approve`, {
         method: "POST",
-        headers: authHeaders(token),
+        headers: deviceHeaders(deviceId),
       });
       onUpdate();
     } finally {
@@ -422,7 +421,7 @@ function TicketCard({
             data={msg.extractedData}
             disabled={approved || queued}
             messageId={msg.id}
-            token={token}
+            deviceId={deviceId}
           />
         )}
 
@@ -484,7 +483,7 @@ function TicketCard({
   );
 }
 
-function QueueSection({ tickets, token, onUpdate }: { tickets: Ticket[]; token: string | null; onUpdate: () => void }) {
+function QueueSection({ tickets, deviceId, onUpdate }: { tickets: Ticket[]; deviceId: string; onUpdate: () => void }) {
   const [open, setOpen] = useState(false);
   const [claiming, setClaiming] = useState<string | null>(null);
   if (tickets.length === 0) return null;
@@ -494,7 +493,7 @@ function QueueSection({ tickets, token, onUpdate }: { tickets: Ticket[]; token: 
     try {
       await fetch(`${API_BASE}/api/tickets/${id}/claim`, {
         method: "POST",
-        headers: authHeaders(token),
+        headers: deviceHeaders(deviceId),
       });
       onUpdate();
     } finally {
@@ -560,71 +559,67 @@ function QueueSection({ tickets, token, onUpdate }: { tickets: Ticket[]; token: 
 
 function MyTicketsTab({
   tickets,
-  token,
+  deviceId,
   loading,
   available,
   togglingAvail,
   toggleAvailability,
   fetchTickets,
-  user,
 }: {
   tickets: Ticket[];
-  token: string | null;
+  deviceId: string;
   loading: boolean;
   available: boolean;
   togglingAvail: boolean;
   toggleAvailability: () => void;
   fetchTickets: () => void;
-  user: { username: string; role: string } | null;
 }) {
   const active = tickets.filter((t) => t.ticketStatus === "pending_approval");
   const queued = tickets.filter((t) => t.ticketStatus === "queued");
 
   return (
     <div>
-      {user && (
-        <div
-          className="mb-6 rounded-xl border overflow-hidden"
-          style={{
-            borderColor: available ? "#86efac" : "#fca5a5",
-            background: available ? "#f0fdf4" : "#fff5f5",
-          }}
-        >
-          <div className="flex items-center justify-between gap-4 px-5 py-4">
-            <div className="flex items-center gap-3">
-              <div
-                className="w-2.5 h-2.5 rounded-full shrink-0"
-                style={{ background: available ? "#16a34a" : "#dc2626" }}
-              />
-              <div>
-                <p className="text-sm font-semibold" style={{ color: "var(--color-ink)" }}>
-                  {available ? "Taking tickets" : "Paused"}
-                </p>
-                <p className="text-xs mt-0.5" style={{ color: "var(--color-ash)" }}>
-                  {available
-                    ? "You will be assigned new tickets as they come in."
-                    : "Your tickets have been reassigned. Turn on to receive new ones."}
-                </p>
-              </div>
+      <div
+        className="mb-6 rounded-xl border overflow-hidden"
+        style={{
+          borderColor: available ? "#86efac" : "#fca5a5",
+          background: available ? "#f0fdf4" : "#fff5f5",
+        }}
+      >
+        <div className="flex items-center justify-between gap-4 px-5 py-4">
+          <div className="flex items-center gap-3">
+            <div
+              className="w-2.5 h-2.5 rounded-full shrink-0"
+              style={{ background: available ? "#16a34a" : "#dc2626" }}
+            />
+            <div>
+              <p className="text-sm font-semibold" style={{ color: "var(--color-ink)" }}>
+                {available ? "Taking tickets" : "Paused"}
+              </p>
+              <p className="text-xs mt-0.5" style={{ color: "var(--color-ash)" }}>
+                {available
+                  ? "You will be assigned new tickets as they come in."
+                  : "Your tickets have been reassigned. Turn on to receive new ones."}
+              </p>
             </div>
-            <button
-              onClick={toggleAvailability}
-              disabled={togglingAvail}
-              className="inline-flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-semibold shrink-0 transition-colors disabled:opacity-50"
-              style={
-                available
-                  ? { background: "#dcfce7", color: "#15803d" }
-                  : { background: "var(--color-dagat)", color: "var(--color-bone)" }
-              }
-            >
-              {available
-                ? <><ToggleRight className="w-4 h-4" strokeWidth={2} /> Pause</>
-                : <><ToggleLeft  className="w-4 h-4" strokeWidth={2} /> Resume</>
-              }
-            </button>
           </div>
+          <button
+            onClick={toggleAvailability}
+            disabled={togglingAvail}
+            className="inline-flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-semibold shrink-0 transition-colors disabled:opacity-50"
+            style={
+              available
+                ? { background: "#dcfce7", color: "#15803d" }
+                : { background: "var(--color-dagat)", color: "var(--color-bone)" }
+            }
+          >
+            {available
+              ? <><ToggleRight className="w-4 h-4" strokeWidth={2} /> Pause</>
+              : <><ToggleLeft  className="w-4 h-4" strokeWidth={2} /> Resume</>
+            }
+          </button>
         </div>
-      )}
+      </div>
 
       {loading ? (
         <div className="flex items-center justify-center py-16">
@@ -655,11 +650,11 @@ function MyTicketsTab({
           ) : (
             <div className="flex flex-col gap-5">
               {active.map((t) => (
-                <TicketCard key={t.id} msg={t} token={token} onUpdate={fetchTickets} />
+                <TicketCard key={t.id} msg={t} deviceId={deviceId} onUpdate={fetchTickets} />
               ))}
             </div>
           )}
-          <QueueSection tickets={queued} token={token} onUpdate={fetchTickets} />
+          <QueueSection tickets={queued} deviceId={deviceId} onUpdate={fetchTickets} />
         </>
       )}
     </div>
@@ -670,12 +665,12 @@ function MyTicketsTab({
 
 function ArchiveTab({
   tickets,
-  token,
+  deviceId,
   loading,
   fetchTickets,
 }: {
   tickets: Ticket[];
-  token: string | null;
+  deviceId: string;
   loading: boolean;
   fetchTickets: () => void;
 }) {
@@ -706,7 +701,7 @@ function ArchiveTab({
   return (
     <div className="flex flex-col gap-4">
       {tickets.map((t) => (
-        <TicketCard key={t.id} msg={t} token={token} onUpdate={fetchTickets} />
+        <TicketCard key={t.id} msg={t} deviceId={deviceId} onUpdate={fetchTickets} />
       ))}
     </div>
   );
@@ -1259,38 +1254,22 @@ function InboxTab() {
 // ─── Main Tickets page ────────────────────────────────────────────────────────
 
 export function Tickets() {
-  const { user, token, logout, isInitializing } = useAuth();
-  const navigate = useNavigate();
+  const { deviceId, receiving, setReceiving } = useAuth();
   const [activeTab, setActiveTab] = useState<TicketsTab>("my-tickets");
   const [tickets, setTickets] = useState<Ticket[]>([]);
   const [loading, setLoading] = useState(true);
-  const [available, setAvailable] = useState<boolean>(true);
   const [togglingAvail, setTogglingAvail] = useState(false);
 
-  useEffect(() => {
-    if (!isInitializing && !user) navigate("/login", { replace: true });
-  }, [isInitializing, user, navigate]);
-
-  useEffect(() => {
-    if (!token || !user) return;
-    fetch(`${API_BASE}/auth/me`, { headers: authHeaders(token) })
-      .then((r) => r.json())
-      .then((d) => { if (typeof d.available === "boolean") setAvailable(d.available); })
-      .catch(() => {});
-  }, [token, user?.role]);
-
   const fetchTickets = useCallback(async () => {
-    if (!token) return;
     setLoading(true);
     try {
-      const res = await fetch(`${API_BASE}/api/tickets`, { headers: authHeaders(token) });
-      if (res.status === 401) { logout(); navigate("/login", { replace: true }); return; }
+      const res = await fetch(`${API_BASE}/api/tickets`, { headers: deviceHeaders(deviceId) });
       const data = await res.json();
       setTickets(Array.isArray(data) ? data : []);
     } finally {
       setLoading(false);
     }
-  }, [token, logout, navigate]);
+  }, [deviceId]);
 
   useEffect(() => { fetchTickets(); }, [fetchTickets]);
 
@@ -1317,16 +1296,10 @@ export function Tickets() {
   }, [fetchTickets]);
 
   async function toggleAvailability() {
-    if (!token) return;
     setTogglingAvail(true);
-    const next = !available;
+    const next = !receiving;
     try {
-      await fetch(`${API_BASE}/auth/users/me/available`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json", ...authHeaders(token) },
-        body: JSON.stringify({ available: next }),
-      });
-      setAvailable(next);
+      await setReceiving(next);
       fetchTickets();
     } finally {
       setTogglingAvail(false);
@@ -1349,29 +1322,16 @@ export function Tickets() {
 
       <main className="flex-1 max-w-4xl mx-auto w-full px-4 py-8 pb-24 md:pb-8">
         {/* Page header */}
-        <div className="mb-6 flex items-start justify-between gap-4">
-          <div>
-            <h1
-              className="font-display font-bold mb-1"
-              style={{ fontSize: 24, color: "var(--color-ink)", letterSpacing: "-0.02em" }}
-            >
-              tickets
-            </h1>
-            <p className="text-sm" style={{ color: "var(--color-ash)" }}>
-              manage assigned tickets, review the full inbox, and browse completed work.
-            </p>
-          </div>
-
-          {user && (
-            <button
-              onClick={() => { logout(); navigate("/login"); }}
-              className="inline-flex items-center gap-1.5 rounded-md py-2 px-3 text-sm font-semibold shrink-0"
-              style={{ background: "var(--color-paper-deep)", color: "var(--color-ink-soft)" }}
-            >
-              <LogOut className="w-3.5 h-3.5" strokeWidth={2} />
-              <span className="hidden sm:inline">{user.username} · </span>sign out
-            </button>
-          )}
+        <div className="mb-6">
+          <h1
+            className="font-display font-bold mb-1"
+            style={{ fontSize: 24, color: "var(--color-ink)", letterSpacing: "-0.02em" }}
+          >
+            tickets
+          </h1>
+          <p className="text-sm" style={{ color: "var(--color-ash)" }}>
+            manage assigned tickets, review the full inbox, and browse completed work.
+          </p>
         </div>
 
         {/* Tab bar */}
@@ -1414,20 +1374,19 @@ export function Tickets() {
         {activeTab === "my-tickets" && (
           <MyTicketsTab
             tickets={myTickets}
-            token={token}
+            deviceId={deviceId}
             loading={loading}
-            available={available}
+            available={receiving}
             togglingAvail={togglingAvail}
             toggleAvailability={toggleAvailability}
             fetchTickets={fetchTickets}
-            user={user}
           />
         )}
         {activeTab === "inbox" && <InboxTab />}
         {activeTab === "archive" && (
           <ArchiveTab
             tickets={archived}
-            token={token}
+            deviceId={deviceId}
             loading={loading}
             fetchTickets={fetchTickets}
           />

@@ -14,9 +14,6 @@ import { MobileIntake } from './pages/MobileIntake';
 import { Coverage } from './pages/Coverage';
 import { History } from './pages/History';
 import { Sagot } from './pages/Sagot';
-import { Login } from './pages/Login';
-import { Signup } from './pages/Signup';
-import { Setup } from './pages/Setup';
 import { Tickets } from './pages/Tickets';
 import { Settings } from './pages/Settings';
 
@@ -35,9 +32,6 @@ export default function App() {
           <Route path="/donor-view" element={<DonorView />} />
           <Route path="/intake" element={<IntakeChannelSelector />} />
           <Route path="/intake/type" element={<MobileIntake />} />
-          <Route path="/login" element={<Login />} />
-          <Route path="/signup" element={<Signup />} />
-          <Route path="/setup" element={<Setup />} />
           <Route path="/tickets" element={<Tickets />} />
           <Route path="/settings" element={<Settings />} />
           <Route path="*" element={<Navigate to="/" replace />} />

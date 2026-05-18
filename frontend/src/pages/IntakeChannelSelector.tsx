@@ -51,25 +51,39 @@ export function IntakeChannelSelector() {
             </div>
           </Link>
 
-          <button className="btn-tap-target w-full flex items-center gap-6 p-6 rounded-xl bg-surface-container-low hover:bg-surface-container-high border border-outline-variant/30 text-left transition-all active:scale-[0.98] duration-150 group">
-            <div className="flex items-center justify-center w-14 h-14 rounded-full bg-tertiary-container/20 text-tertiary">
+          <div className="w-full flex items-center gap-6 p-6 rounded-xl border border-outline-variant/20 text-left opacity-50 cursor-not-allowed select-none"
+            style={{ background: "var(--color-paper-warm)" }}>
+            <div className="flex items-center justify-center w-14 h-14 rounded-full bg-tertiary-container/10 text-tertiary/50">
               <Mic className="w-8 h-8" />
             </div>
             <div className="flex-1">
-              <h3 className="text-xl font-bold text-on-surface mb-1 font-headline">voice note</h3>
+              <div className="flex items-center gap-2 mb-1">
+                <h3 className="text-xl font-bold text-on-surface font-headline">voice note</h3>
+                <span className="font-mono text-xs px-2 py-0.5 rounded-full font-semibold"
+                  style={{ background: "var(--color-paper-edge)", color: "var(--color-ash)" }}>
+                  unavailable
+                </span>
+              </div>
               <p className="text-sm text-on-surface-variant">record or upload a clip</p>
             </div>
-          </button>
+          </div>
 
-          <button className="btn-tap-target w-full flex items-center gap-6 p-6 rounded-xl bg-surface-container-low hover:bg-surface-container-high border border-outline-variant/30 text-left transition-all active:scale-[0.98] duration-150 group">
-            <div className="flex items-center justify-center w-14 h-14 rounded-full bg-secondary-container/60 text-secondary">
+          <div className="w-full flex items-center gap-6 p-6 rounded-xl border border-outline-variant/20 text-left opacity-50 cursor-not-allowed select-none"
+            style={{ background: "var(--color-paper-warm)" }}>
+            <div className="flex items-center justify-center w-14 h-14 rounded-full bg-secondary-container/20 text-secondary/50">
               <Camera className="w-8 h-8" />
             </div>
             <div className="flex-1">
-              <h3 className="text-xl font-bold text-on-surface mb-1 font-headline">photo of note</h3>
+              <div className="flex items-center gap-2 mb-1">
+                <h3 className="text-xl font-bold text-on-surface font-headline">photo of note</h3>
+                <span className="font-mono text-xs px-2 py-0.5 rounded-full font-semibold"
+                  style={{ background: "var(--color-paper-edge)", color: "var(--color-ash)" }}>
+                  unavailable
+                </span>
+              </div>
               <p className="text-sm text-on-surface-variant">handwritten list or a document</p>
             </div>
-          </button>
+          </div>
         </div>
 
         <button
